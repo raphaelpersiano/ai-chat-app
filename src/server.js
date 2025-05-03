@@ -93,9 +93,22 @@ io.on("connection", (socket) => {
 
   // Store conversation history per socket connection (simple in-memory example)
   const conversationHistory = [
-    { role: "system", content: "You are a helpful assistant acting as the admin in a chat application. Keep your responses concise and friendly." },
-    { role: "assistant", content: "Halo! Selamat datang di Chat App. Ada yang bisa saya bantu?" } // Initial greeting
+    {
+      role: "system",
+      content: `
+        You are an assistant helping users understand their credit data in this chat application.
+        You have access to credit bureau data, including account types, outstanding balances, credit limits, payment history, and credit scores.
+        Your role is to explain the user's credit profile and payment behavior in simple, clear language, and give practical advice they can take to maintain or improve their credit score.
+        You must only answer questions related to credit. If the user asks about anything unrelated to credit, politely decline and explain that you are a credit assistant and not designed to assist with other topics.
+        Keep responses concise, friendly, and personalized. Avoid technical terms unless the user asks for them.
+      `
+    },
+    {
+      role: "assistant",
+      content: "Hello! I'm here to help you understand your credit data and share tips to keep your credit-score healthy. Feel free to ask me anything."
+    }
   ];
+  
 
   socket.on("sendMessage", async (message) => {
     console.log(`Message received from ${socket.id}:`, message);
@@ -122,7 +135,7 @@ io.on("connection", (socket) => {
       const response = await axios.post(
         openRouterUrl,
         {
-          model: "meta-llama/llama-3-8b-instruct", // Using Llama 3 8B Instruct as a capable model
+          model: "meta-llama/llama-4-scout:free", // Change Model
           messages: conversationHistory,
         },
         {

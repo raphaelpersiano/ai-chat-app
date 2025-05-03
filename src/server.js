@@ -5,7 +5,8 @@ const cors = require("cors");
 const http = require("http");
 const socketIo = require("socket.io");
 const path = require("path");
-const axios = require("axios"); // Import axios
+const axios = require("axios");
+const db = require("./config/database"); // Import the database connection
 require("dotenv").config();
 
 // Initialize Express app
@@ -34,6 +35,8 @@ app.use(passport.session());
 
 // Authentication middleware
 const isAuthenticated = (req, res, next) => {
+  // Store user info in session for socket access if needed (more robust approach)
+  // For now, we rely on the client fetching user info separately
   if (req.isAuthenticated()) {
     return next();
   }
@@ -67,31 +70,81 @@ app.get(
   "/auth/google/callback",
   passport.authenticate("google", { failureRedirect: "/login" }),
   (req, res) => {
+    // Here you could potentially store req.user.id in the session
+    // associated with the socket later
     res.redirect("/chat");
   }
 );
 
-app.get("/logout", (req, res) => {
+app.get("/logout", (req, res, next) => { // Added next for error handling
   req.logout((err) => {
     if (err) {
-      // In newer express versions, req.logout requires a callback
-      // In passport 0.6+, req.logout is async and needs a callback or promise handling
       return next(err);
     }
-    res.redirect("/login");
+    req.session.destroy((err) => { // Ensure session is destroyed
+        if (err) {
+            return next(err);
+        }
+        res.clearCookie("connect.sid"); // Clear session cookie
+        res.redirect("/login");
+    });
   });
 });
 
 // User info route
 app.get("/api/user", isAuthenticated, (req, res) => {
-  res.json(req.user);
+  // Ensure req.user exists and has the necessary fields
+  if (req.user && req.user.id) {
+      res.json({
+          id: req.user.id, // Send Google ID
+          displayName: req.user.displayName,
+          email: req.user.email,
+          photo: req.user.photo
+      });
+  } else {
+      res.status(401).json({ error: "User not authenticated or user data missing" });
+  }
 });
 
-// Socket.io connection
+// --- Helper function to get credit data ---
+async function getCreditDataForUser(userId) {
+  return new Promise((resolve, reject) => {
+    const creditData = {};
+    db.get("SELECT * FROM UserCreditInsights WHERE user_id = ?", [userId], (err, insights) => {
+      if (err) return reject(err);
+      if (!insights) return resolve(null); // No data found for user
+
+      creditData.insights = insights;
+      db.all("SELECT * FROM UserTradelineData WHERE user_id = ?", [userId], (err, tradelines) => {
+        if (err) return reject(err);
+        creditData.tradelines = tradelines || [];
+        
+        // Fetch payment history for each tradeline
+        const historyPromises = creditData.tradelines.map(tl => 
+          new Promise((resolveHistory, rejectHistory) => {
+            db.all("SELECT * FROM UserPaymentHistory WHERE tradeline_id = ? ORDER BY payment_date DESC", [tl.tradeline_id], (err, history) => {
+              if (err) return rejectHistory(err);
+              tl.paymentHistory = history || [];
+              resolveHistory();
+            });
+          })
+        );
+
+        Promise.all(historyPromises)
+          .then(() => resolve(creditData))
+          .catch(reject);
+      });
+    });
+  });
+}
+// --- End Helper function ---
+
 io.on("connection", (socket) => {
   console.log("New client connected:", socket.id);
+  // TODO: Associate socket with authenticated user ID (e.g., via session or initial handshake)
+  // For now, using a dummy ID for simulation
+  const currentUserId = "dummy_google_id_123"; 
 
-  // Store conversation history per socket connection (simple in-memory example)
   const conversationHistory = [
     {
       role: "system",
@@ -105,15 +158,13 @@ io.on("connection", (socket) => {
     },
     {
       role: "assistant",
-      content: "Hello! I'm here to help you understand your credit data and share tips to keep your credit-score healthy. Feel free to ask me anything."
+      content: "Hello! Welcome to Chat App. I'm here to help you understand your credit data and share tips to keep your score healthy. Feel free to ask me anything."
     }
   ];
   
 
   socket.on("sendMessage", async (message) => {
     console.log(`Message received from ${socket.id}:`, message);
-
-    // Add user message to history
     conversationHistory.push({ role: "user", content: message.text });
 
     const openRouterApiKey = process.env.OPENROUTER_API_KEY;
@@ -121,22 +172,33 @@ io.on("connection", (socket) => {
 
     if (!openRouterApiKey || openRouterApiKey === "your_openrouter_api_key") {
       console.warn("OpenRouter API key not configured.");
-      socket.emit("receiveMessage", {
-        sender: "Admin",
-        text: "Maaf, konfigurasi AI admin belum selesai. Silakan hubungi pengembang.",
-        timestamp: new Date(),
-      });
-      // Remove user message if AI is not configured
-      conversationHistory.pop(); 
+      socket.emit("receiveMessage", { sender: "Admin", text: "Maaf, konfigurasi AI admin belum selesai.", timestamp: new Date() });
+      conversationHistory.pop();
       return;
     }
 
     try {
+      // --- Fetch credit data for the user ---
+      const userCreditData = await getCreditDataForUser(currentUserId);
+      let creditDataContext = "No credit data available for this user.";
+      if (userCreditData) {
+          // Simple string formatting for context. Could be JSON stringified too.
+          creditDataContext = `User Credit Data:\nInsights: ${JSON.stringify(userCreditData.insights)}\nTradelines: ${JSON.stringify(userCreditData.tradelines)}`; // Includes payment history nested within tradelines
+      }
+      // --- End Fetch credit data ---
+
+      // Prepare messages for LLM, including credit data context
+      const messagesForLLM = [
+          ...conversationHistory.slice(0, 1), // System prompt
+          { role: "system", content: `Current User's Simulated Credit Data:\n${creditDataContext}` }, // Add credit data as a system message
+          ...conversationHistory.slice(1) // Assistant and User messages
+      ];
+
       const response = await axios.post(
         openRouterUrl,
         {
-          model: "meta-llama/llama-4-scout:free", // Change Model
-          messages: conversationHistory,
+          model: "meta-llama/llama-3-8b-instruct",
+          messages: messagesForLLM, // Send augmented message history
         },
         {
           headers: {
@@ -150,13 +212,10 @@ io.on("connection", (socket) => {
       if (response.data && response.data.choices && response.data.choices.length > 0) {
         aiResponseText = response.data.choices[0].message.content;
       }
-      
-      console.log(`AI Response for ${socket.id}:`, aiResponseText);
 
-      // Add AI response to history
+      console.log(`AI Response for ${socket.id}:`, aiResponseText);
       conversationHistory.push({ role: "assistant", content: aiResponseText });
 
-      // Send AI response back to the client
       socket.emit("receiveMessage", {
         sender: "Admin",
         text: aiResponseText,
@@ -164,12 +223,11 @@ io.on("connection", (socket) => {
       });
 
     } catch (error) {
-      console.error("Error calling OpenRouter API:", error.response ? error.response.data : error.message);
-      // Remove user message from history on error
-      conversationHistory.pop(); 
+      console.error("Error during AI processing or data fetching:", error.response ? error.response.data : error.message);
+      conversationHistory.pop();
       socket.emit("receiveMessage", {
         sender: "Admin",
-        text: "Maaf, terjadi kesalahan saat menghubungi admin AI. Coba lagi nanti.",
+        text: "Maaf, terjadi kesalahan saat memproses permintaan Anda atau mengambil data kredit.",
         timestamp: new Date(),
       });
     }
@@ -183,6 +241,7 @@ io.on("connection", (socket) => {
 // Start server
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
+  console.log(`Database file located at: ${path.resolve(__dirname, "./config/database.js").replace("config/database.js", "credit_sim.db")}`); // Log DB path
   console.log(`Server running on port ${PORT}`);
 });
 

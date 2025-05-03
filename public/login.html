@@ -4,27 +4,34 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login - Chat App</title>
-    <link rel="stylesheet" href="css/styles.css">
+    <!-- Menggunakan Tailwind CSS yang dihasilkan -->
+    <link rel="stylesheet" href="css/tailwind.css">
+    <!-- Font opsional, bisa diintegrasikan ke Tailwind config jika diinginkan -->
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <style>
+        /* Tambahkan gaya khusus jika diperlukan, atau integrasikan font ke tailwind.config.js */
+        body { font-family: 'Roboto', sans-serif; }
+    </style>
 </head>
-<body class="login-page">
-    <div class="login-container">
-        <div class="login-card">
-            <div class="login-header">
-                <h1>Chat App</h1>
-                <p>Silakan login untuk memulai percakapan</p>
+<body class="flex justify-center items-center min-h-screen bg-gray-100">
+    <div class="w-full max-w-sm p-4">
+        <div class="bg-white rounded-lg shadow-xl overflow-hidden">
+            <div class="p-6 text-center border-b border-gray-200">
+                <h1 class="text-3xl font-bold text-teal-600 mb-2">Chat App</h1>
+                <p class="text-gray-600">Silakan login untuk memulai percakapan</p>
             </div>
-            <div class="login-body">
-                <a href="/auth/google" class="google-login-btn">
-                    <img src="img/google-icon.svg" alt="Google Icon">
+            <div class="p-8">
+                <a href="/auth/google" class="flex items-center justify-center w-full px-4 py-3 bg-white border border-gray-300 rounded-md text-gray-700 text-base font-medium hover:bg-gray-50 transition duration-150 ease-in-out shadow-sm">
+                    <img src="img/google-icon.svg" alt="Google Icon" class="w-5 h-5 mr-3">
                     <span>Login dengan Google</span>
                 </a>
             </div>
-            <div class="login-footer">
-                <p>Aplikasi chat sederhana dengan dukungan admin</p>
+            <div class="p-4 text-center text-sm text-gray-500 border-t border-gray-200 bg-gray-50">
+                <p>Simulasi Asisten Kredit AI</p>
             </div>
         </div>
     </div>
+    <!-- Script JS tetap sama -->
     <script src="js/login.js"></script>
 </body>
 </html>

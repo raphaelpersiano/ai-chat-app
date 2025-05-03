@@ -4,48 +4,142 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chat - Chat App</title>
-    <link rel="stylesheet" href="css/styles.css">
+    <!-- Menggunakan Tailwind CSS yang dihasilkan -->
+    <link rel="stylesheet" href="css/tailwind.css">
+    <!-- Font opsional -->
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <!-- Font Awesome untuk ikon -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
+    <style>
+        body { font-family: 'Roboto', sans-serif; }
+        /* Background chat seperti WhatsApp (opsional, bisa dihapus jika tidak suka) */
+        .chat-bg {
+            background-image: url('https://web.whatsapp.com/img/bg-chat-tile-dark_a4be512e7195b6b733d9110b408f075d.png');
+            background-color: #e5ddd5; /* Fallback color */
+        }
+    </style>
 </head>
-<body>
-    <div class="chat-container">
-        <div class="chat-header">
-            <div class="user-info">
-                <img id="user-avatar" class="user-avatar" src="" alt="User Avatar">
-                <div>
-                    <h3 id="user-name">Loading...</h3>
-                    <small>Online</small>
-                </div>
-            </div>
-            <div class="admin-info">
-                <div class="admin-avatar">A</div>
-                <div>
-                    <h3>Admin</h3>
-                </div>
-            </div>
-            <a href="/logout" class="logout-button">Logout</a>
-        </div>
-        
-        <div id="chat-body" class="chat-body">
-            <!-- Messages will be dynamically added here -->
-            <div class="message admin-message">
-                <div class="message-content">
-                    <p>Hello! I'm here to help you understand your credit data and share tips to keep your credit-score healthy. Feel free to ask me anything.</p>
-                    <div class="message-time">12:00</div>
-                </div>
+<body class="flex flex-col h-screen bg-gray-100">
+    <!-- Header -->
+    <div class="flex items-center justify-between p-3 bg-teal-600 text-white shadow-md">
+        <div class="flex items-center space-x-3">
+            <img id="user-avatar" class="w-10 h-10 rounded-full object-cover border-2 border-white" src="" alt="User Avatar">
+            <div>
+                <h3 id="user-name" class="font-semibold text-lg leading-tight">Loading...</h3>
+                <small class="text-xs text-teal-100">Online</small>
             </div>
         </div>
-        
-        <div class="chat-footer">
-            <input type="text" id="message-input" class="message-input" placeholder="Ketik pesan..." autocomplete="off">
-            <button id="send-button" class="send-button" disabled>
-                <i class="fas fa-paper-plane"></i>
-            </button>
+        <div class="flex items-center space-x-3">
+            <div class="flex items-center space-x-2">
+                <div class="w-10 h-10 rounded-full bg-teal-800 flex items-center justify-center font-bold text-xl">A</div>
+                <h3 class="font-semibold text-lg hidden sm:block">Admin</h3>
+            </div>
+            <a href="/logout" class="text-sm text-teal-100 hover:text-white underline ml-4">Logout</a>
         </div>
     </div>
-    
+
+    <!-- Chat Body -->
+    <div id="chat-body" class="flex-grow p-4 overflow-y-auto chat-bg space-y-4">
+        <!-- Pesan akan ditambahkan secara dinamis di sini -->
+        <!-- Contoh Pesan Admin -->
+        <div class="flex justify-start">
+            <div class="bg-white rounded-lg p-3 max-w-xs lg:max-w-md shadow">
+                <p class="text-sm text-gray-800">Hello! Welcome to Chat App. I'm here to help you understand your credit data and share tips to keep your score healthy. Feel free to ask me anything.</p>
+                <div class="text-xs text-gray-400 text-right mt-1">12:00</div>
+            </div>
+        </div>
+        <!-- Contoh Pesan User (akan ditambahkan oleh JS) -->
+        <!-- 
+        <div class="flex justify-end">
+            <div class="bg-green-100 rounded-lg p-3 max-w-xs lg:max-w-md shadow">
+                <p class="text-sm text-gray-800">Ini pesan user.</p>
+                <div class="text-xs text-gray-500 text-right mt-1">12:01</div>
+            </div>
+        </div> 
+        -->
+    </div>
+
+    <!-- Chat Footer -->
+    <div class="flex items-center p-3 bg-gray-100 border-t border-gray-200">
+        <input type="text" id="message-input" class="flex-grow px-4 py-2 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent mr-3" placeholder="Ketik pesan..." autocomplete="off">
+        <button id="send-button" class="w-10 h-10 flex items-center justify-center bg-teal-600 text-white rounded-full hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-1 disabled:bg-gray-400 disabled:cursor-not-allowed" disabled>
+            <i class="fas fa-paper-plane"></i>
+        </button>
+    </div>
+
     <script src="/socket.io/socket.io.js"></script>
     <script src="js/chat.js"></script>
+    <script>
+        // Modifikasi kecil pada chat.js untuk menambahkan class Tailwind
+        // (Ini idealnya dilakukan dengan memodifikasi file chat.js, tapi untuk sementara bisa di-override di sini atau di chat.js)
+        function addMessageToUI(sender, text) {
+            const chatBody = document.getElementById('chat-body');
+            const messageDiv = document.createElement('div');
+            const contentDiv = document.createElement('div');
+            const textP = document.createElement('p');
+            const timeDiv = document.createElement('div');
+
+            const now = new Date();
+            const timeString = now.getHours().toString().padStart(2, '0') + ':' + 
+                              now.getMinutes().toString().padStart(2, '0');
+
+            // Styling dasar
+            messageDiv.classList.add('flex', 'mb-4');
+            contentDiv.classList.add('rounded-lg', 'p-3', 'max-w-xs', 'lg:max-w-md', 'shadow');
+            textP.classList.add('text-sm', 'text-gray-800');
+            timeDiv.classList.add('text-xs', 'text-right', 'mt-1');
+
+            textP.textContent = text;
+            timeDiv.textContent = timeString;
+
+            if (sender === 'user') {
+                messageDiv.classList.add('justify-end');
+                contentDiv.classList.add('bg-green-100');
+                timeDiv.classList.add('text-gray-500');
+            } else {
+                messageDiv.classList.add('justify-start');
+                contentDiv.classList.add('bg-white');
+                timeDiv.classList.add('text-gray-400');
+            }
+
+            contentDiv.appendChild(textP);
+            contentDiv.appendChild(timeDiv);
+            messageDiv.appendChild(contentDiv);
+            chatBody.appendChild(messageDiv);
+
+            // Scroll to bottom
+            chatBody.scrollTop = chatBody.scrollHeight;
+        }
+
+        // Override fungsi asli jika sudah ada di chat.js (atau modifikasi chat.js langsung)
+        // Pastikan chat.js dimuat sebelum script ini jika diletakkan di sini
+        // Atau lebih baik, modifikasi fungsi addMessageToUI di dalam file chat.js
+
+        // Re-fetch user info on load (jika belum ada di chat.js)
+        document.addEventListener('DOMContentLoaded', function() {
+            const originalAddMessage = window.addMessageToUI; // Simpan fungsi asli jika ada
+            window.addMessageToUI = addMessageToUI; // Ganti dengan fungsi baru
+            
+            // Panggil fungsi asli jika perlu (misalnya jika chat.js sudah punya event listener)
+            // Jika tidak, pastikan semua event listener di chat.js menggunakan fungsi baru ini
+            
+            // Fetch user info (jika belum ada di chat.js)
+            const userAvatar = document.getElementById('user-avatar');
+            const userName = document.getElementById('user-name');
+            fetch('/api/user')
+                .then(response => response.json())
+                .then(user => {
+                    if (user && user.displayName) userName.textContent = user.displayName;
+                    if (user && user.photo) userAvatar.src = user.photo;
+                    else userAvatar.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'; // Placeholder
+                })
+                .catch(error => {
+                    console.error('Error fetching user info:', error);
+                    userName.textContent = 'Error';
+                    userAvatar.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'; // Placeholder
+                });
+        });
+
+    </script>
 </body>
 </html>

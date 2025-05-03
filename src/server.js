@@ -6,7 +6,7 @@ const http = require("http");
 const socketIo = require("socket.io");
 const path = require("path");
 const axios = require("axios");
-const db = require("./config/database"); // Import the database connection
+const pool = require("./config/database"); // Import the PostgreSQL pool
 require("dotenv").config();
 
 // Initialize Express app
@@ -26,6 +26,7 @@ app.use(
     secret: process.env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
+    // Consider using connect-pg-simple for session storage in production with PostgreSQL
   })
 );
 
@@ -35,8 +36,6 @@ app.use(passport.session());
 
 // Authentication middleware
 const isAuthenticated = (req, res, next) => {
-  // Store user info in session for socket access if needed (more robust approach)
-  // For now, we rely on the client fetching user info separately
   if (req.isAuthenticated()) {
     return next();
   }
@@ -70,22 +69,20 @@ app.get(
   "/auth/google/callback",
   passport.authenticate("google", { failureRedirect: "/login" }),
   (req, res) => {
-    // Here you could potentially store req.user.id in the session
-    // associated with the socket later
     res.redirect("/chat");
   }
 );
 
-app.get("/logout", (req, res, next) => { // Added next for error handling
+app.get("/logout", (req, res, next) => {
   req.logout((err) => {
     if (err) {
       return next(err);
     }
-    req.session.destroy((err) => { // Ensure session is destroyed
+    req.session.destroy((err) => {
         if (err) {
             return next(err);
         }
-        res.clearCookie("connect.sid"); // Clear session cookie
+        res.clearCookie("connect.sid");
         res.redirect("/login");
     });
   });
@@ -93,10 +90,9 @@ app.get("/logout", (req, res, next) => { // Added next for error handling
 
 // User info route
 app.get("/api/user", isAuthenticated, (req, res) => {
-  // Ensure req.user exists and has the necessary fields
   if (req.user && req.user.id) {
       res.json({
-          id: req.user.id, // Send Google ID
+          id: req.user.id,
           displayName: req.user.displayName,
           email: req.user.email,
           photo: req.user.photo
@@ -106,62 +102,44 @@ app.get("/api/user", isAuthenticated, (req, res) => {
   }
 });
 
-// --- Helper function to get credit data ---
+// --- Helper function to get credit data (PostgreSQL version) ---
 async function getCreditDataForUser(userId) {
-  return new Promise((resolve, reject) => {
-    const creditData = {};
-    db.get("SELECT * FROM UserCreditInsights WHERE user_id = ?", [userId], (err, insights) => {
-      if (err) return reject(err);
-      if (!insights) return resolve(null); // No data found for user
+  const creditData = {};
+  try {
+    // Fetch insights
+    const insightsRes = await pool.query("SELECT * FROM UserCreditInsights WHERE user_id = $1", [userId]);
+    if (insightsRes.rows.length === 0) {
+      return null; // No data found for user
+    }
+    creditData.insights = insightsRes.rows[0];
 
-      creditData.insights = insights;
-      db.all("SELECT * FROM UserTradelineData WHERE user_id = ?", [userId], (err, tradelines) => {
-        if (err) return reject(err);
-        creditData.tradelines = tradelines || [];
-        
-        // Fetch payment history for each tradeline
-        const historyPromises = creditData.tradelines.map(tl => 
-          new Promise((resolveHistory, rejectHistory) => {
-            db.all("SELECT * FROM UserPaymentHistory WHERE tradeline_id = ? ORDER BY payment_date DESC", [tl.tradeline_id], (err, history) => {
-              if (err) return rejectHistory(err);
-              tl.paymentHistory = history || [];
-              resolveHistory();
-            });
-          })
-        );
+    // Fetch tradelines
+    const tradelinesRes = await pool.query("SELECT * FROM UserTradelineData WHERE user_id = $1", [userId]);
+    creditData.tradelines = tradelinesRes.rows || [];
 
-        Promise.all(historyPromises)
-          .then(() => resolve(creditData))
-          .catch(reject);
-      });
-    });
-  });
+    // Fetch payment history for each tradeline
+    for (const tl of creditData.tradelines) {
+      const historyRes = await pool.query("SELECT * FROM UserPaymentHistory WHERE tradeline_id = $1 ORDER BY payment_date DESC", [tl.tradeline_id]);
+      tl.paymentHistory = historyRes.rows || [];
+    }
+
+    return creditData;
+  } catch (err) {
+    console.error("Error fetching credit data from PostgreSQL:", err);
+    throw err; // Re-throw the error to be caught by the caller
+  }
 }
 // --- End Helper function ---
 
 io.on("connection", (socket) => {
   console.log("New client connected:", socket.id);
-  // TODO: Associate socket with authenticated user ID (e.g., via session or initial handshake)
-  // For now, using a dummy ID for simulation
-  const currentUserId = "dummy_google_id_123"; 
+  // TODO: Properly associate socket with authenticated user ID from session/handshake
+  const currentUserId = "dummy_google_id_123"; // Still using dummy ID for simulation
 
   const conversationHistory = [
-    {
-      role: "system",
-      content: `
-        You are an assistant helping users understand their credit data in this chat application.
-        You have access to credit bureau data, including account types, outstanding balances, credit limits, payment history, and credit scores.
-        Your role is to explain the user's credit profile and payment behavior in simple, clear language, and give practical advice they can take to maintain or improve their credit score.
-        You must only answer questions related to credit. If the user asks about anything unrelated to credit, politely decline and explain that you are a credit assistant and not designed to assist with other topics.
-        Keep responses concise, friendly, and personalized. Avoid technical terms unless the user asks for them.
-      `
-    },
-    {
-      role: "assistant",
-      content: "Hello! Welcome to Chat App. I'm here to help you understand your credit data and share tips to keep your score healthy. Feel free to ask me anything."
-    }
+    { role: "system", content: "You are a helpful AI credit assistant. Analyze the provided user credit data (insights, tradelines, payment history) to answer questions about their credit status, payment behavior, and provide practical recommendations for improvement. Be concise and clear." },
+    { role: "assistant", content: "Halo! Selamat datang. Saya adalah asisten kredit AI Anda. Tanyakan apa saja tentang data kredit simulasi Anda." }
   ];
-  
 
   socket.on("sendMessage", async (message) => {
     console.log(`Message received from ${socket.id}:`, message);
@@ -170,6 +148,12 @@ io.on("connection", (socket) => {
     const openRouterApiKey = process.env.OPENROUTER_API_KEY;
     const openRouterUrl = process.env.OPENROUTER_URL || "https://openrouter.ai/api/v1/chat/completions";
 
+    if (!process.env.DATABASE_URL) {
+        console.error("DATABASE_URL not configured.");
+        socket.emit("receiveMessage", { sender: "Admin", text: "Maaf, konfigurasi database belum selesai.", timestamp: new Date() });
+        conversationHistory.pop();
+        return;
+    }
     if (!openRouterApiKey || openRouterApiKey === "your_openrouter_api_key") {
       console.warn("OpenRouter API key not configured.");
       socket.emit("receiveMessage", { sender: "Admin", text: "Maaf, konfigurasi AI admin belum selesai.", timestamp: new Date() });
@@ -178,27 +162,25 @@ io.on("connection", (socket) => {
     }
 
     try {
-      // --- Fetch credit data for the user ---
+      // --- Fetch credit data for the user (using PostgreSQL helper) ---
       const userCreditData = await getCreditDataForUser(currentUserId);
       let creditDataContext = "No credit data available for this user.";
       if (userCreditData) {
-          // Simple string formatting for context. Could be JSON stringified too.
-          creditDataContext = `User Credit Data:\nInsights: ${JSON.stringify(userCreditData.insights)}\nTradelines: ${JSON.stringify(userCreditData.tradelines)}`; // Includes payment history nested within tradelines
+          creditDataContext = `User Credit Data:\nInsights: ${JSON.stringify(userCreditData.insights)}\nTradelines: ${JSON.stringify(userCreditData.tradelines)}`;
       }
       // --- End Fetch credit data ---
 
-      // Prepare messages for LLM, including credit data context
       const messagesForLLM = [
-          ...conversationHistory.slice(0, 1), // System prompt
-          { role: "system", content: `Current User's Simulated Credit Data:\n${creditDataContext}` }, // Add credit data as a system message
-          ...conversationHistory.slice(1) // Assistant and User messages
+          ...conversationHistory.slice(0, 1),
+          { role: "system", content: `Current User's Simulated Credit Data:\n${creditDataContext}` },
+          ...conversationHistory.slice(1)
       ];
 
       const response = await axios.post(
         openRouterUrl,
         {
           model: "meta-llama/llama-3-8b-instruct",
-          messages: messagesForLLM, // Send augmented message history
+          messages: messagesForLLM,
         },
         {
           headers: {
@@ -241,8 +223,12 @@ io.on("connection", (socket) => {
 // Start server
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Database file located at: ${path.resolve(__dirname, "./config/database.js").replace("config/database.js", "credit_sim.db")}`); // Log DB path
   console.log(`Server running on port ${PORT}`);
+  if (process.env.DATABASE_URL) {
+      console.log("Attempting to connect to PostgreSQL via DATABASE_URL");
+  } else {
+      console.warn("DATABASE_URL environment variable is not set. Database operations will fail.");
+  }
 });
 
 module.exports = { app, server, io };

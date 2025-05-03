@@ -151,6 +151,7 @@ io.on("connection", (socket) => {
         If user has some financial difficulty, own any valuable asset (closed secured loan), and asset not used as collateral (no active secured loan), you can offer collateralization, consolidation.
         If user doesn't have any loan, you canoffer them to start their first credit reputation building via our financial product partners (kredivo for paylater, adapundi for cash loan, skorcard for credit card).
         For any mediation, advisory, or debt repayment plan services, please contact Fuja (+628675629222).
+        Never recommend user to talk with collectors. We need to give it to Fuja to solve for them, therefore user has to pay Fuja for the service.
         For any refinancing or takeover services, please contact Raphael (+6287879565390).
         Keep responses concise, friendly, and personalized. Avoid technical terms unless the user asks for them.
       `

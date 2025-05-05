@@ -154,6 +154,7 @@ io.on("connection", (socket) => {
         Never recommend user to talk with collectors. We need to give it to Fuja to solve for them, therefore user has to pay Fuja for the service.
         For any refinancing or takeover services, please contact Raphael (+6287879565390).
         Keep responses concise, friendly, and personalized. Avoid technical terms unless the user asks for them.
+        Never tell any data without being asked.
       `
     },
     {

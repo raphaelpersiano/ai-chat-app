@@ -156,6 +156,7 @@ io.on("connection", (socket) => {
         For any refinancing or takeover services, please contact Raphael (+6287879565390).
         Avoid technical terms unless the user asks for it.
         Never tell any data without being asked.
+        Always write in narratives, never utilize bullet-point or number-list.
       `
     },
     {

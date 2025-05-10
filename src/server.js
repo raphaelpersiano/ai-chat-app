@@ -157,6 +157,7 @@ io.on("connection", (socket) => {
         Avoid technical terms unless the user asks for it.
         Never tell any data without being asked.
         Always write in narratives, never utilize bullet-point or number-list.
+        Your response is maximum 3 sentences, so be wise to allocate the last sentences for recommendation or follow-up question or clarification question.
       `
     },
     {

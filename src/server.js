@@ -7,6 +7,7 @@ const socketIo = require("socket.io");
 const path = require("path");
 const axios = require("axios");
 const pool = require("./config/database"); // Import the PostgreSQL pool
+const sharedsession = require("express-socket.io-session"); // Import shared session
 require("dotenv").config();
 
 // Initialize Express app
@@ -21,18 +22,22 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, "../public")));
 
 // Session configuration
-app.use(
-  session({
-    secret: process.env.SESSION_SECRET,
-    resave: false,
-    saveUninitialized: false,
-    // Consider using connect-pg-simple for session storage in production with PostgreSQL
-  })
-);
+const sessionMiddleware = session({
+  secret: process.env.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  // Consider using connect-pg-simple for session storage in production with PostgreSQL
+});
+app.use(sessionMiddleware);
 
 // Initialize Passport
 app.use(passport.initialize());
 app.use(passport.session());
+
+// Share session with Socket.IO
+io.use(sharedsession(sessionMiddleware, {
+    autoSave: true
+}));
 
 // Authentication middleware
 const isAuthenticated = (req, res, next) => {
@@ -68,32 +73,89 @@ app.get(
 app.get(
   "/auth/google/callback",
   passport.authenticate("google", { failureRedirect: "/login" }),
-  (req, res) => {
-    res.redirect("/chat");
+  async (req, res) => {
+    if (req.user && req.user.id) {
+      const { id, displayName, email } = req.user;
+
+      try {
+        // Cek apakah user_id sudah ada di usercreditinsights
+        const result = await pool.query(
+          "SELECT 1 FROM usercreditinsights WHERE user_id = $1",
+          [id]
+        );
+
+        if (result.rows.length === 0) {
+          console.log(`User ${id} tidak ada di usercreditinsights. Membuat dummy data.`);
+
+          // 1️⃣ Insert ke usercreditinsights
+          await pool.query(
+            `INSERT INTO usercreditinsights (
+              user_id, credit_score, collectability, outstanding_amount,
+              number_of_unsecured_loan, number_of_secured_loan, penalty_amount,
+              max_dpd, last_updated, number_of_cc, full_name, email
+            ) VALUES (
+              $1, 650, 1, 10000000, 2, 1, 0, 5, NOW(), 1, $2, $3
+            )`,
+            [id, displayName, email]
+          );
+
+          // 2️⃣ Insert ke usertradelinedata (dummy 2 tradeline)
+          const tradelineRes = await pool.query(
+            `INSERT INTO usertradelinedata (
+              user_id, creditor, loan_type, credit_limit, outstanding,
+              monthly_payment, interest_rate, tenure, open_date, status
+            ) VALUES
+              ($1, 'Bank ABC', 'personal_loan', 5000000, 3000000, 500000, 12.5, 24, NOW(), 'active'),
+              ($1, 'Bank XYZ', 'credit_card', 10000000, 2000000, 300000, 18.0, 36, NOW(), 'active')
+            RETURNING tradeline_id`,
+            [id]
+          );
+
+          const tradelineIds = tradelineRes.rows.map(row => row.tradeline_id);
+
+          // 3️⃣ Insert ke userpaymenthistory untuk masing-masing tradeline
+          for (const tid of tradelineIds) {
+            await pool.query(
+              `INSERT INTO userpaymenthistory (
+                tradeline_id, payment_date, payment_amount, penalty_amount, dpd
+              ) VALUES
+                ($1, NOW() - INTERVAL '30 days', 500000, 0, 0),
+                ($1, NOW() - INTERVAL '60 days', 500000, 0, 0)`,
+              [tid]
+            );
+          }
+
+          console.log(`Dummy data berhasil dibuat untuk user ${id}`);
+        } else {
+          console.log(`User ${id} sudah ada di usercreditinsights.`);
+        }
+
+        // Tetap update basic user info (full_name, email, last_updated)
+        await pool.query(
+          `INSERT INTO usercreditinsights (user_id, full_name, email, last_updated)
+           VALUES ($1, $2, $3, NOW())
+           ON CONFLICT (user_id)
+           DO UPDATE SET full_name = EXCLUDED.full_name, email = EXCLUDED.email, last_updated = NOW()`,
+          [id, displayName, email]
+        );
+
+      } catch (err) {
+        console.error("Error checking/inserting user data:", err);
+      }
+
+      res.redirect("/chat");
+    } else {
+      res.redirect("/login");
+    }
   }
 );
-
-app.get("/logout", (req, res, next) => {
-  req.logout((err) => {
-    if (err) {
-      return next(err);
-    }
-    req.session.destroy((err) => {
-        if (err) {
-            return next(err);
-        }
-        res.clearCookie("connect.sid");
-        res.redirect("/login");
-    });
-  });
-});
 
 // User info route
 app.get("/api/user", isAuthenticated, (req, res) => {
   if (req.user && req.user.id) {
       res.json({
           id: req.user.id,
-          displayName: req.user.displayName,
+          full_name: req.user.displayName, // Tetap kirim displayName dari Google
           email: req.user.email,
           photo: req.user.photo
       });
@@ -107,39 +169,47 @@ async function getCreditDataForUser(userId) {
   const creditData = {};
   try {
     // Fetch insights
-    const insightsRes = await pool.query("SELECT * FROM UserCreditInsights WHERE user_id = $1", [userId]);
+    const insightsRes = await pool.query("SELECT * FROM usercreditinsights WHERE user_id = $1", [userId]);
     if (insightsRes.rows.length === 0) {
-      return null; // No data found for user
+      console.log(`No credit insights found for user ${userId}. They might need dummy data inserted.`);
+      return null; 
     }
     creditData.insights = insightsRes.rows[0];
 
     // Fetch tradelines
-    const tradelinesRes = await pool.query("SELECT * FROM UserTradelineData WHERE user_id = $1", [userId]);
+    const tradelinesRes = await pool.query("SELECT * FROM usertradelinedata WHERE user_id = $1", [userId]);
     creditData.tradelines = tradelinesRes.rows || [];
 
     // Fetch payment history for each tradeline
     for (const tl of creditData.tradelines) {
-      const historyRes = await pool.query("SELECT * FROM UserPaymentHistory WHERE tradeline_id = $1 ORDER BY payment_date DESC", [tl.tradeline_id]);
+      const historyRes = await pool.query("SELECT * FROM userpaymenthistory WHERE tradeline_id = $1 ORDER BY payment_date DESC", [tl.tradeline_id]);
       tl.paymentHistory = historyRes.rows || [];
     }
 
     return creditData;
   } catch (err) {
-    console.error("Error fetching credit data from PostgreSQL:", err);
-    throw err; // Re-throw the error to be caught by the caller
+    console.error(`Error fetching credit data for user ${userId} from PostgreSQL:`, err);
+    throw err;
   }
 }
 // --- End Helper function ---
 
 io.on("connection", (socket) => {
-  console.log("New client connected:", socket.id);
-  // TODO: Properly associate socket with authenticated user ID from session/handshake
-  const currentUserId = "dummy_google_id_123"; // Still using dummy ID for simulation
+  // --- Access user session data via socket handshake ---
+  let currentUserId = null;
+  if (socket.handshake.session && socket.handshake.session.passport && socket.handshake.session.passport.user) {
+      currentUserId = socket.handshake.session.passport.user; // This should be the Google ID
+      console.log(`Client connected: ${socket.id}, User ID: ${currentUserId}`);
+  } else {
+      console.log(`Client connected: ${socket.id}, but user is not authenticated via session.`);
+      // Optionally disconnect unauthenticated sockets or handle them differently
+      // socket.disconnect(true);
+      // return;
+  }
+  // --- End Access user session data ---
 
   const conversationHistory = [
-    {
-      role: "system",
-      content: `
+    { role: "system", content: `
         You are an assistant helping users understand their credit data in this chat application.
         You understand user's credit data, including account types, outstanding balances, credit limits, payment history, credit scores, etc.
         Your role is to explain the user's credit profile and payment behavior in simple way and give practical advice they can take to maintain or improve their credit score.
@@ -158,17 +228,21 @@ io.on("connection", (socket) => {
         Never tell any data without being asked.
         Always write in narratives, never utilize bullet-point or number-list.
         Your response is maximum 3 sentences, so be wise to allocate the last sentences for recommendation or follow-up question or clarification question.
-      `
-    },
-    {
-      role: "assistant",
-      content: "Hello! Welcome to Chat App. I'm here to help you understand your credit data and share tips to keep your score healthy. Feel free to ask me anything."
-    }
+        never bold any text, and always use bahasa indonesia.
+      ` },
+    { role: "assistant", content: "Halo! Selamat datang. Saya adalah asisten kredit AI Anda. Tanyakan apa saja tentang data kredit simulasi Anda." }
   ];
-  
 
   socket.on("sendMessage", async (message) => {
-    console.log(`Message received from ${socket.id}:`, message);
+    // --- Check if user ID is available ---
+    if (!currentUserId) {
+        console.log(`Message received from unauthenticated socket ${socket.id}`);
+        socket.emit("receiveMessage", { sender: "Admin", text: "Sesi Anda tidak valid atau telah berakhir. Silakan login kembali.", timestamp: new Date() });
+        return;
+    }
+    // --- End Check user ID ---
+
+    console.log(`Message received from ${socket.id} (User: ${currentUserId}):`, message);
     conversationHistory.push({ role: "user", content: message.text });
 
     const openRouterApiKey = process.env.OPENROUTER_API_KEY;
@@ -188,11 +262,21 @@ io.on("connection", (socket) => {
     }
 
     try {
-      // --- Fetch credit data for the user (using PostgreSQL helper) ---
+      // --- Fetch credit data for the AUTHENTICATED user ---
       const userCreditData = await getCreditDataForUser(currentUserId);
       let creditDataContext = "No credit data available for this user.";
       if (userCreditData) {
-          creditDataContext = `User Credit Data:\nInsights: ${JSON.stringify(userCreditData.insights)}\nTradelines: ${JSON.stringify(userCreditData.tradelines)}`;
+          // Only include relevant parts, avoid sending sensitive info like email back to LLM if not needed
+          const insightsForLLM = { ...userCreditData.insights };
+          delete insightsForLLM.user_id;
+          delete insightsForLLM.email;
+          delete insightsForLLM.last_updated;
+          
+          creditDataContext = `User Credit Data:\nInsights: ${JSON.stringify(insightsForLLM)}\nTradelines: ${JSON.stringify(userCreditData.tradelines)}`;
+      } else {
+          console.log(`No credit data found for user ${currentUserId} in DB.`);
+          // Optionally inform the user or just proceed without context
+          creditDataContext = "No specific credit data found for your account in the simulation database.";
       }
       // --- End Fetch credit data ---
 
@@ -205,7 +289,7 @@ io.on("connection", (socket) => {
       const response = await axios.post(
         openRouterUrl,
         {
-          model: "meta-llama/llama-4-scout:free",
+          model: "google/gemini-2.0-flash-exp:free",
           messages: messagesForLLM,
         },
         {
@@ -221,7 +305,7 @@ io.on("connection", (socket) => {
         aiResponseText = response.data.choices[0].message.content;
       }
 
-      console.log(`AI Response for ${socket.id}:`, aiResponseText);
+      console.log(`AI Response for ${socket.id} (User: ${currentUserId}):`, aiResponseText);
       conversationHistory.push({ role: "assistant", content: aiResponseText });
 
       socket.emit("receiveMessage", {
@@ -231,7 +315,7 @@ io.on("connection", (socket) => {
       });
 
     } catch (error) {
-      console.error("Error during AI processing or data fetching:", error.response ? error.response.data : error.message);
+      console.error(`Error during AI processing or data fetching for user ${currentUserId}:`, error.response ? error.response.data : error.message);
       conversationHistory.pop();
       socket.emit("receiveMessage", {
         sender: "Admin",
@@ -242,7 +326,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
-    console.log("Client disconnected:", socket.id);
+    console.log(`Client disconnected: ${socket.id} (User: ${currentUserId || 'N/A'})`);
   });
 });
 

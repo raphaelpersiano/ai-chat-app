@@ -7,11 +7,12 @@ Ini adalah aplikasi web sederhana yang memungkinkan pengguna login menggunakan a
 ## Fitur
 
 *   Login pengguna melalui Google OAuth 2.0.
-*   Antarmuka chat real-time seperti WhatsApp menggunakan Socket.IO.
+*   **Antarmuka Chat:** Antarmuka chat real-time seperti WhatsApp menggunakan Socket.IO, dengan header yang berisi ikon refresh dan logout..
 *   Admin chat yang didukung oleh AI (model Llama melalui OpenRouter).
 *   **Simulasi Asisten Kredit:** AI dapat menjawab pertanyaan tentang data kredit fiktif pengguna (skor, riwayat pembayaran) dan memberikan saran berdasarkan data tersebut dari database PostgreSQL.
 *   Server backend menggunakan Node.js dan Express.
 *   Frontend modern menggunakan **Tailwind CSS**.
+*   **Deteksi Tautan Otomatis:** Tautan (URL) dalam respons AI secara otomatis dideteksi dan ditampilkan sebagai tombol "Click Here" yang dapat diklik, membuka tautan di tab baru.
 
 ## Prasyarat
 
@@ -82,11 +83,13 @@ Ini adalah aplikasi web sederhana yang memungkinkan pengguna login menggunakan a
 *   **Input CSS:** File `src/input.css` berisi direktif dasar Tailwind. Anda dapat menambahkan CSS kustom di sini jika diperlukan.
 *   **Output CSS:** Proses build Tailwind menghasilkan file `public/css/tailwind.css`.
 *   **Build Manual:** `npm run build:css`
+*   **Deteksi Tautan:** Logika untuk mendeteksi dan mengubah tautan menjadi tombol ada di dalam fungsi `addMessageToUI` di file `public/js/chat.js`.
 
 ## Simulasi Asisten Kredit
 
-*   **Cara Kerja:** Ketika pengguna mengirim pesan, server mengambil data kredit fiktif dari database **PostgreSQL** untuk pengguna yang sedang aktif (saat ini di-hardcode ke `dummy_google_id_123` untuk simulasi). Data ini kemudian dimasukkan ke dalam prompt yang dikirim ke API LLM.
-*   **Pengguna Simulasi:** Untuk menguji fitur ini, Anda perlu login dengan akun Google mana saja. Backend saat ini akan selalu mengambil data untuk `dummy_google_id_123` dari database PostgreSQL Anda.
+*   **Cara Kerja:** Ketika pengguna mengirim pesan, server mengambil data kredit fiktif dari database **PostgreSQL** untuk pengguna yang sedang login (menggunakan ID Google yang terotentikasi). Data ini kemudian dimasukkan ke dalam prompt yang dikirim ke API LLM.
+*   **Keamanan:** Sistem secara otomatis menggunakan ID Google pengguna yang terotentikasi untuk mengambil data dari database, memastikan bahwa pengguna hanya dapat mengakses data mereka sendiri.
+*   **Pengguna Simulasi:** Untuk menguji fitur ini, Anda perlu login dengan akun Google Anda, dan memastikan bahwa data kredit fiktif untuk ID Google Anda telah dimasukkan ke dalam database PostgreSQL.
 *   **Contoh Pertanyaan:** Coba tanyakan (sesuaikan dengan data dummy yang Anda masukkan):
     *   "Berapa skor kredit saya?"
     *   "Bagaimana riwayat pembayaran kartu kredit saya?"
@@ -106,6 +109,7 @@ chat-app/
 │   │   └── tailwind.css
 │   ├── img/
 │   ├── js/
+│   │   └── chat.js       # Logika frontend chat, termasuk deteksi tautan
 │   ├── chat.html
 │   └── login.html
 ├── src/

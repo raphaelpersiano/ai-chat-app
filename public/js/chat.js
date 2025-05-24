@@ -6,26 +6,11 @@ document.addEventListener("DOMContentLoaded", function() {
     const chatBody = document.getElementById("chat-body");
     const messageInput = document.getElementById("message-input");
     const sendButton = document.getElementById("send-button");
-    const userAvatar = document.getElementById("user-avatar");
-    const userName = document.getElementById("user-name");
+    const refreshButton = document.getElementById("refresh-button");
+    const logoutButton = document.getElementById("logout-button");
     
     // Socket.io connection
     const socket = io();
-    
-    // Get user info
-    fetch("/api/user")
-        .then(response => response.json())
-        .then(user => {
-            console.log("User info:", user);
-            if (user && user.displayName) userName.textContent = user.displayName;
-            if (user && user.photo) userAvatar.src = user.photo;
-            else userAvatar.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"; // Placeholder
-        })
-        .catch(error => {
-            console.error("Error fetching user info:", error);
-            userName.textContent = "Error";
-            userAvatar.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"; // Placeholder
-        });
     
     // Enable/disable send button based on input
     messageInput.addEventListener("input", function() {
@@ -41,30 +26,99 @@ document.addEventListener("DOMContentLoaded", function() {
             sendMessage();
         }
     });
+
+    // --- Add event listeners for header buttons ---
+    if (refreshButton) {
+        refreshButton.addEventListener("click", function() {
+            window.location.reload();
+        });
+    }
+
+    if (logoutButton) {
+        logoutButton.addEventListener("click", function() {
+            window.location.href = "/logout";
+        });
+    }
+    // --- End header button listeners ---
+
+    // --- Typing Indicator Functions ---
+    let typingIndicatorElement = null;
+
+    function showTypingIndicator() {
+        // Remove existing indicator if any
+        hideTypingIndicator(); 
+
+        const messageDiv = document.createElement("div");
+        messageDiv.id = "typing-indicator-message"; // Assign an ID for easy removal
+        messageDiv.classList.add("flex", "justify-start", "mb-4");
+
+        const contentDiv = document.createElement("div");
+        contentDiv.classList.add("bg-white", "text-gray-700", "rounded-xl", "rounded-tl-none", "p-3", "max-w-lg", "shadow-sm");
+
+        const indicatorDiv = document.createElement("div");
+        indicatorDiv.classList.add("typing-indicator");
+        indicatorDiv.innerHTML = '<span></span><span></span><span></span>'; // Add the three dots
+
+        contentDiv.appendChild(indicatorDiv);
+        messageDiv.appendChild(contentDiv);
+        chatBody.appendChild(messageDiv);
+        typingIndicatorElement = messageDiv; // Store reference
+
+        // Scroll to bottom to make indicator visible
+        chatBody.scrollTop = chatBody.scrollHeight;
+    }
+
+    function hideTypingIndicator() {
+        if (typingIndicatorElement) {
+            typingIndicatorElement.remove();
+            typingIndicatorElement = null;
+        }
+    }
+    // --- End Typing Indicator Functions ---
     
     // Function to send message
     function sendMessage() {
         const messageText = messageInput.value.trim();
         if (messageText === "") return;
         
-        // Add message to UI using the updated function
         addMessageToUI("user", messageText);
         
-        // Send message to server
         socket.emit("sendMessage", {
             text: messageText,
             timestamp: new Date()
         });
         
-        // Clear input
+        // Show typing indicator immediately after sending
+        showTypingIndicator();
+
         messageInput.value = "";
         sendButton.disabled = true;
-        
-        // Focus input for next message
         messageInput.focus();
     }
     
-    // Updated function to add message to UI using Tailwind classes
+    // --- Function to detect and replace URLs with buttons ---
+    function linkify(text) {
+        const urlRegex = /(https?:\/\/[^\s]+)/g;
+        const parts = [];
+        let lastIndex = 0;
+        let match;
+
+        while ((match = urlRegex.exec(text)) !== null) {
+            if (match.index > lastIndex) {
+                parts.push({ type: "text", content: text.substring(lastIndex, match.index) });
+            }
+            parts.push({ type: "link", content: match[0] });
+            lastIndex = match.index + match[0].length;
+        }
+
+        if (lastIndex < text.length) {
+            parts.push({ type: "text", content: text.substring(lastIndex) });
+        }
+        return parts;
+    }
+    // --- End linkify function ---
+
+    // Updated function to add message to UI
     function addMessageToUI(sender, text) {
         const chatBody = document.getElementById("chat-body");
         const messageDiv = document.createElement("div");
@@ -76,22 +130,45 @@ document.addEventListener("DOMContentLoaded", function() {
         const timeString = now.getHours().toString().padStart(2, "0") + ":" + 
                           now.getMinutes().toString().padStart(2, "0");
 
-        // Apply Tailwind classes
         messageDiv.classList.add("flex", "mb-4");
-        contentDiv.classList.add("rounded-lg", "p-3", "max-w-xs", "lg:max-w-md", "shadow");
-        textP.classList.add("text-sm", "text-gray-800");
-        timeDiv.classList.add("text-xs", "text-right", "mt-1");
+        contentDiv.classList.add("rounded-xl", "p-3", "max-w-lg", "shadow-sm");
+        textP.classList.add("text-sm", "whitespace-pre-wrap");
+        timeDiv.classList.add("text-xs", "text-right", "mt-1", "opacity-75");
 
-        textP.textContent = text;
+        if (sender === "admin") {
+            const parts = linkify(text);
+            parts.forEach(part => {
+                if (part.type === "text") {
+                    textP.appendChild(document.createTextNode(part.content));
+                } else if (part.type === "link") {
+                    const linkButton = document.createElement("a");
+                    linkButton.href = part.content;
+                    linkButton.target = "_blank";
+                    linkButton.rel = "noopener noreferrer";
+                    linkButton.textContent = "Click Here";
+                    linkButton.classList.add(
+                        "inline-block", "bg-teal-500", "text-white", "text-xs", "font-semibold", 
+                        "py-1", "px-2", "rounded", "hover:bg-teal-600", "transition", 
+                        "duration-150", "mx-1", "my-1"
+                    );
+                    textP.appendChild(linkButton);
+                }
+            });
+        } else {
+            textP.textContent = text;
+        }
+
         timeDiv.textContent = timeString;
 
         if (sender === "user") {
             messageDiv.classList.add("justify-end");
-            contentDiv.classList.add("bg-green-100");
+            contentDiv.classList.add("bg-green-100", "text-gray-800", "rounded-br-none");
+            textP.classList.add("text-gray-800");
             timeDiv.classList.add("text-gray-500");
-        } else { // Assuming sender === 'admin' or any other
+        } else { // Admin
             messageDiv.classList.add("justify-start");
-            contentDiv.classList.add("bg-white");
+            contentDiv.classList.add("bg-white", "text-gray-700", "rounded-tl-none");
+            textP.classList.add("text-gray-700");
             timeDiv.classList.add("text-gray-400");
         }
 
@@ -100,17 +177,20 @@ document.addEventListener("DOMContentLoaded", function() {
         messageDiv.appendChild(contentDiv);
         chatBody.appendChild(messageDiv);
 
-        // Scroll to bottom
         chatBody.scrollTop = chatBody.scrollHeight;
     }
     
-    // Make the function globally accessible if needed, or ensure event listeners use this scope
-    // window.addMessageToUI = addMessageToUI; // Optional: if other scripts need it
+    window.addMessageToUI = addMessageToUI;
+
+    // Add initial AI welcome message dynamically
+    addMessageToUI("admin", "Halo! Selamat datang di Skorlife Insight. Ada yang bisa saya bantu?");
 
     // Listen for messages from server (admin/AI responses)
     socket.on("receiveMessage", function(message) {
         console.log("Received message:", message);
-        addMessageToUI("admin", message.text); // Use the updated function
+        // Hide typing indicator before showing the message
+        hideTypingIndicator(); 
+        addMessageToUI("admin", message.text);
     });
     
     // Handle connection events
@@ -120,6 +200,8 @@ document.addEventListener("DOMContentLoaded", function() {
     
     socket.on("disconnect", function() {
         console.log("Disconnected from server");
+        hideTypingIndicator(); // Hide indicator on disconnect too
+        addMessageToUI("admin", "Koneksi terputus. Mencoba menyambungkan kembali...");
     });
 });
 

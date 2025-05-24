@@ -3,3 +3,59 @@ This file is no longer actively used as styling is now primarily handled by Tail
 The generated Tailwind CSS file is located at /public/css/tailwind.css.
 This file is kept for reference or potential future custom non-utility styles.
 */
+body { font-family: 'Inter', sans-serif; }
+/* Lebih halus chat background */
+.chat-bg-pattern {
+  background-color: #eaeaea; /* Warna latar belakang abu-abu muda */
+  /* Optional: Tambahkan pola titik halus jika diinginkan */
+  /* background-image: radial-gradient(#d1d5db 1px, transparent 1px); */
+  /* background-size: 10px 10px; */
+}
+/* Custom scrollbar (opsional, mungkin tidak berfungsi di semua browser) */
+#chat-body::-webkit-scrollbar {
+  width: 6px;
+}
+#chat-body::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+#chat-body::-webkit-scrollbar-thumb {
+  background: #a8a8a8;
+  border-radius: 3px;
+}
+#chat-body::-webkit-scrollbar-thumb:hover {
+  background: #888;
+}
+
+.typing-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.typing-indicator span {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  background-color: #555;
+  border-radius: 50%;
+  animation: blink 1.4s infinite both;
+}
+
+.typing-indicator span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing-indicator span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes blink {
+  0%, 80%, 100% {
+    opacity: 0.2;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+

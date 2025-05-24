@@ -90,7 +90,7 @@ app.get(
           // 1️⃣ Insert ke usercreditinsights
           await pool.query(
             `INSERT INTO usercreditinsights (
-              user_id, credit_score, collectability, outstanding_amount,
+              user_id, credit_score, KOL_score, outstanding_amount,
               number_of_unsecured_loan, number_of_secured_loan, penalty_amount,
               max_dpd, last_updated, number_of_cc, full_name, email
             ) VALUES (
@@ -221,14 +221,14 @@ io.on("connection", (socket) => {
         If user has some financial difficulty, own any valuable asset (closed secured loan), and asset used as collateral (has active secured loan), you can offer them takeover, mediation.
         If user has some financial difficulty, own any valuable asset (closed secured loan), and asset not used as collateral (no active secured loan), you can offer collateralization, consolidation.
         If user doesn't have any loan, you canoffer them to start their first credit reputation building via our financial product partners (kredivo for paylater, adapundi for cash loan, skorcard for credit card).
-        For any mediation, advisory, or debt repayment plan services, please contact Fuja (+628675629222).
+        For any mediation, advisory, or debt repayment plan services, please contact Fuja at https://wa.me/628675629222.
         Never recommend user to talk with collectors. We need to give it to Fuja to solve for them, therefore user has to pay Fuja for the service.
-        For any refinancing or takeover services, please contact Raphael (+6287879565390).
+        For any refinancing or takeover services, please contact Raphael at https://wa.me/6287879565390.
         Avoid technical terms unless the user asks for it.
         Never tell any data without being asked.
         Always write in narratives, never utilize bullet-point or number-list.
-        Your response is maximum 3 sentences, so be wise to allocate the last sentences for recommendation or follow-up question or clarification question.
-        never bold any text, and always use bahasa indonesia.
+        Your response is maximum 5 sentences, so be wise to allocate the last sentences for recommendation or follow-up question or clarification question.
+        never bold any text, and always use bahasa indonesia (unless the user ask you to speak english).
       ` },
     { role: "assistant", content: "Halo! Selamat datang. Saya adalah asisten kredit AI Anda. Tanyakan apa saja tentang data kredit simulasi Anda." }
   ];

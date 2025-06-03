@@ -8,7 +8,66 @@ const path = require("path");
 const axios = require("axios");
 const pool = require("./config/database"); // Import the PostgreSQL pool
 const sharedsession = require("express-socket.io-session"); // Import shared session
+const pdfParse = require("pdf-parse"); // Import pdf-parse
 require("dotenv").config();
+
+// --- Knowledge Base Configuration ---
+// Use an array for multiple knowledge base URLs
+const KNOWLEDGE_BASE_PDF_URLS = [
+  "https://storage.googleapis.com/campaign-skorlife/SkorBot%20Briefing%20v1.pdf",
+  "https://storage.googleapis.com/campaign-skorlife/SkorBot%20Briefing%20v1.pdf",
+  "https://storage.googleapis.com/campaign-skorlife/SkorBot%20Briefing%20v1.pdf",
+  "https://storage.googleapis.com/campaign-skorlife/SkorBot%20Briefing%20v1.pdf",
+  "https://storage.googleapis.com/campaign-skorlife/SkorBot%20Briefing%20v1.pdf"
+];
+let knowledgeBaseContent = `Anda adalah asisten AI dasar. Knowledge base belum dimuat atau gagal dimuat.`; // Default fallback
+
+// --- Function to Fetch and Extract Knowledge Base from Multiple URLs ---
+async function updateKnowledgeBase() {
+  console.log(`Mencoba mengambil knowledge base dari ${KNOWLEDGE_BASE_PDF_URLS.length} sumber PDF...`);
+  let combinedText = "";
+  let successCount = 0;
+
+  // Use Promise.allSettled to fetch and parse all PDFs concurrently
+  const results = await Promise.allSettled(
+    KNOWLEDGE_BASE_PDF_URLS.map(async (url) => {
+      try {
+        console.log(`Mengambil dari: ${url}`);
+        const response = await axios.get(url, {
+          responseType: "arraybuffer",
+          timeout: 15000, // Add timeout for network requests
+        });
+        const data = await pdfParse(response.data);
+        console.log(`Berhasil mengekstrak dari: ${url}`);
+        return data.text;
+      } catch (error) {
+        console.error(`Gagal mengambil atau mengekstrak dari ${url}:`, error.message);
+        // Throw error to be caught by allSettled as 'rejected'
+        throw new Error(`Gagal memproses ${url}: ${error.message}`);
+      }
+    })
+  );
+
+  // Process results
+  results.forEach((result, index) => {
+    if (result.status === "fulfilled") {
+      // Optional: Add separator or context marker between documents
+      combinedText += `\n\n--- Knowledge Base Dokumen ${index + 1} ---\n\n` + result.value;
+      successCount++;
+    } else {
+      console.error(`Gagal memproses URL ${KNOWLEDGE_BASE_PDF_URLS[index]}: ${result.reason}`);
+    }
+  });
+
+  if (successCount > 0) {
+    knowledgeBaseContent = combinedText.trim();
+    console.log(`Berhasil memuat dan menggabungkan ${successCount} dari ${KNOWLEDGE_BASE_PDF_URLS.length} knowledge base PDF.`);
+  } else {
+    console.error("Gagal memuat semua knowledge base PDF. Menggunakan fallback.");
+    // Keep the default fallback content
+  }
+}
+// --- End Knowledge Base Function ---
 
 // Initialize Express app
 const app = express();
@@ -23,10 +82,9 @@ app.use(express.static(path.join(__dirname, "../public")));
 
 // Session configuration
 const sessionMiddleware = session({
-  secret: process.env.SESSION_SECRET,
+  secret: process.env.SESSION_SECRET || "default_secret", // Use env var or default
   resave: false,
   saveUninitialized: false,
-  // Consider using connect-pg-simple for session storage in production with PostgreSQL
 });
 app.use(sessionMiddleware);
 
@@ -76,19 +134,14 @@ app.get(
   async (req, res) => {
     if (req.user && req.user.id) {
       const { id, displayName, email } = req.user;
-
       try {
-        // Cek apakah user_id sudah ada di usercreditinsights
         const result = await pool.query(
           "SELECT 1 FROM usercreditinsights WHERE user_id = $1",
           [id]
         );
-
         if (result.rows.length === 0) {
           console.log(`User ${id} tidak ada di usercreditinsights. Membuat dummy data.`);
-
-          // 1️⃣ Insert ke usercreditinsights
-          await pool.query(
+           await pool.query(
             `INSERT INTO usercreditinsights (
               user_id, credit_score, KOL_score, outstanding_amount,
               number_of_unsecured_loan, number_of_secured_loan, penalty_amount,
@@ -98,8 +151,6 @@ app.get(
             )`,
             [id, displayName, email]
           );
-
-          // 2️⃣ Insert ke usertradelinedata (dummy 2 tradeline)
           const tradelineRes = await pool.query(
             `INSERT INTO usertradelinedata (
               user_id, creditor, loan_type, credit_limit, outstanding,
@@ -110,10 +161,7 @@ app.get(
             RETURNING tradeline_id`,
             [id]
           );
-
           const tradelineIds = tradelineRes.rows.map(row => row.tradeline_id);
-
-          // 3️⃣ Insert ke userpaymenthistory untuk masing-masing tradeline
           for (const tid of tradelineIds) {
             await pool.query(
               `INSERT INTO userpaymenthistory (
@@ -124,13 +172,10 @@ app.get(
               [tid]
             );
           }
-
           console.log(`Dummy data berhasil dibuat untuk user ${id}`);
         } else {
           console.log(`User ${id} sudah ada di usercreditinsights.`);
         }
-
-        // Tetap update basic user info (full_name, email, last_updated)
         await pool.query(
           `INSERT INTO usercreditinsights (user_id, full_name, email, last_updated)
            VALUES ($1, $2, $3, NOW())
@@ -138,11 +183,9 @@ app.get(
            DO UPDATE SET full_name = EXCLUDED.full_name, email = EXCLUDED.email, last_updated = NOW()`,
           [id, displayName, email]
         );
-
       } catch (err) {
         console.error("Error checking/inserting user data:", err);
       }
-
       res.redirect("/chat");
     } else {
       res.redirect("/login");
@@ -155,7 +198,7 @@ app.get("/api/user", isAuthenticated, (req, res) => {
   if (req.user && req.user.id) {
       res.json({
           id: req.user.id,
-          full_name: req.user.displayName, // Tetap kirim displayName dari Google
+          full_name: req.user.displayName,
           email: req.user.email,
           photo: req.user.photo
       });
@@ -168,24 +211,18 @@ app.get("/api/user", isAuthenticated, (req, res) => {
 async function getCreditDataForUser(userId) {
   const creditData = {};
   try {
-    // Fetch insights
     const insightsRes = await pool.query("SELECT * FROM usercreditinsights WHERE user_id = $1", [userId]);
     if (insightsRes.rows.length === 0) {
-      console.log(`No credit insights found for user ${userId}. They might need dummy data inserted.`);
-      return null; 
+      console.log(`No credit insights found for user ${userId}.`);
+      return null;
     }
     creditData.insights = insightsRes.rows[0];
-
-    // Fetch tradelines
     const tradelinesRes = await pool.query("SELECT * FROM usertradelinedata WHERE user_id = $1", [userId]);
     creditData.tradelines = tradelinesRes.rows || [];
-
-    // Fetch payment history for each tradeline
     for (const tl of creditData.tradelines) {
       const historyRes = await pool.query("SELECT * FROM userpaymenthistory WHERE tradeline_id = $1 ORDER BY payment_date DESC", [tl.tradeline_id]);
       tl.paymentHistory = historyRes.rows || [];
     }
-
     return creditData;
   } catch (err) {
     console.error(`Error fetching credit data for user ${userId} from PostgreSQL:`, err);
@@ -195,52 +232,26 @@ async function getCreditDataForUser(userId) {
 // --- End Helper function ---
 
 io.on("connection", (socket) => {
-  // --- Access user session data via socket handshake ---
   let currentUserId = null;
   if (socket.handshake.session && socket.handshake.session.passport && socket.handshake.session.passport.user) {
-      currentUserId = socket.handshake.session.passport.user; // This should be the Google ID
+      currentUserId = socket.handshake.session.passport.user;
       console.log(`Client connected: ${socket.id}, User ID: ${currentUserId}`);
   } else {
       console.log(`Client connected: ${socket.id}, but user is not authenticated via session.`);
-      // Optionally disconnect unauthenticated sockets or handle them differently
-      // socket.disconnect(true);
-      // return;
   }
-  // --- End Access user session data ---
 
+  // Initialize conversation history using the combined knowledge base
   const conversationHistory = [
-    { role: "system", content: `
-        You are an assistant helping users understand their credit data in this chat application.
-        You understand user's credit data, including account types, outstanding balances, credit limits, payment history, credit scores, etc.
-        Your role is to explain the user's credit profile and payment behavior in simple way and give practical advice they can take to maintain or improve their credit score.
-        Your tone should resemble that of a friendly financial advisor who doesn’t sound condescending. Use everyday, polite, short/concise, and easy-to-understand language.
-        Every amount is always on Rupiah currency, never use other currency.
-        You must only answer questions related to credit. If the user asks about anything unrelated to credit, politely decline and explain that you are a credit assistant and not designed to assist with other topics.
-        If user has some loan and don't have any financial difficulty, you can offer them our financial product partners (kredivo for paylater, adapundi for cash loan, skorcard for credit card).
-        If user has some financial difficulty and they don't own any valuable asset (no closed secured loan), you can offer them mediation, advisory, debt repayment plan.
-        If user has some financial difficulty, own any valuable asset (closed secured loan), and asset used as collateral (has active secured loan), you can offer them takeover, mediation.
-        If user has some financial difficulty, own any valuable asset (closed secured loan), and asset not used as collateral (no active secured loan), you can offer collateralization, consolidation.
-        If user doesn't have any loan, you canoffer them to start their first credit reputation building via our financial product partners (kredivo for paylater, adapundi for cash loan, skorcard for credit card).
-        For any mediation, advisory, or debt repayment plan services, please contact Fuja at https://wa.me/628675629222.
-        Never recommend user to talk with collectors. We need to give it to Fuja to solve for them, therefore user has to pay Fuja for the service.
-        For any refinancing or takeover services, please contact Raphael at https://wa.me/6287879565390.
-        Avoid technical terms unless the user asks for it.
-        Never tell any data without being asked.
-        Always write in narratives, never utilize bullet-point or number-list.
-        Your response is maximum 5 sentences, so be wise to allocate the last sentences for recommendation or follow-up question or clarification question.
-        never bold any text, and always use bahasa indonesia (unless the user ask you to speak english).
-      ` },
+    { role: "system", content: knowledgeBaseContent }, // Use the combined dynamic content
     { role: "assistant", content: "Halo! Selamat datang. Saya adalah asisten kredit AI Anda. Tanyakan apa saja tentang data kredit simulasi Anda." }
   ];
 
   socket.on("sendMessage", async (message) => {
-    // --- Check if user ID is available ---
     if (!currentUserId) {
         console.log(`Message received from unauthenticated socket ${socket.id}`);
         socket.emit("receiveMessage", { sender: "Admin", text: "Sesi Anda tidak valid atau telah berakhir. Silakan login kembali.", timestamp: new Date() });
         return;
     }
-    // --- End Check user ID ---
 
     console.log(`Message received from ${socket.id} (User: ${currentUserId}):`, message);
     conversationHistory.push({ role: "user", content: message.text });
@@ -262,28 +273,24 @@ io.on("connection", (socket) => {
     }
 
     try {
-      // --- Fetch credit data for the AUTHENTICATED user ---
       const userCreditData = await getCreditDataForUser(currentUserId);
       let creditDataContext = "No credit data available for this user.";
       if (userCreditData) {
-          // Only include relevant parts, avoid sending sensitive info like email back to LLM if not needed
           const insightsForLLM = { ...userCreditData.insights };
           delete insightsForLLM.user_id;
           delete insightsForLLM.email;
           delete insightsForLLM.last_updated;
-          
           creditDataContext = `User Credit Data:\nInsights: ${JSON.stringify(insightsForLLM)}\nTradelines: ${JSON.stringify(userCreditData.tradelines)}`;
       } else {
           console.log(`No credit data found for user ${currentUserId} in DB.`);
-          // Optionally inform the user or just proceed without context
           creditDataContext = "No specific credit data found for your account in the simulation database.";
       }
-      // --- End Fetch credit data ---
 
+      // Prepare messages for LLM, including dynamic system prompt and user data context
       const messagesForLLM = [
-          ...conversationHistory.slice(0, 1),
+          conversationHistory[0], // The dynamic system prompt (combined KB)
           { role: "system", content: `Current User's Simulated Credit Data:\n${creditDataContext}` },
-          ...conversationHistory.slice(1)
+          ...conversationHistory.slice(1) // Assistant greeting + user messages
       ];
 
       const response = await axios.post(
@@ -330,16 +337,19 @@ io.on("connection", (socket) => {
   });
 });
 
-// Start server
+// Start server and fetch initial knowledge base
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  if (process.env.DATABASE_URL) {
-      console.log("Attempting to connect to PostgreSQL via DATABASE_URL");
-  } else {
-      console.warn("DATABASE_URL environment variable is not set. Database operations will fail.");
-  }
-});
+(async () => {
+  await updateKnowledgeBase(); // Fetch KB before starting server
+  server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    if (process.env.DATABASE_URL) {
+        console.log("Attempting to connect to PostgreSQL via DATABASE_URL");
+    } else {
+        console.warn("DATABASE_URL environment variable is not set. Database operations will fail.");
+    }
+  });
+})();
 
 module.exports = { app, server, io };
 

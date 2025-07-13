@@ -184,7 +184,7 @@ document.addEventListener("DOMContentLoaded", function() {
     window.addMessageToUI = addMessageToUI;
 
     // Initial AI welcome message
-    addMessageToUI("admin", "Halo! Selamat datang di Skorlife Insight. Saya telah diupgrade dengan sistem double texting yang cerdas dan animasi mengetik. Anda bisa mengirim beberapa pesan berturut-turut dan saya akan mempertimbangkan semuanya! ");
+    addMessageToUI("admin", "Hai, ada yang bisa saya bantu?");
 
     // Socket event listeners
     socket.on("aiStatus", function(statusData) {

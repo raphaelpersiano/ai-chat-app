@@ -12,12 +12,13 @@ const pdfParse = require("pdf-parse"); // Import pdf-parse
 const ChatLogger = require("./models/chatLogger"); // Import chat logger (uses Supabase)
 require("dotenv").config();
 
-const RESPONSE_DELAY_MS = 6000;
+const RESPONSE_DELAY_MS = 5000;
 
 // --- Knowledge Base Configuration ---
 // Use an array for multiple knowledge base URLs
 const KNOWLEDGE_BASE_PDF_URLS = [
-  "https://storage.googleapis.com/campaign-skorlife/Chatbot/SkorBot%20Briefing%20v1.pdf"
+  "https://storage.googleapis.com/campaign-skorlife/Chatbot/SkorBot%20Briefing.pdf",
+  "https://storage.googleapis.com/campaign-skorlife/Chatbot/FAQ%20Skorlife.pdf"
 ];
 let knowledgeBaseContent = `Anda adalah asisten AI dasar. Knowledge base belum dimuat atau gagal dimuat.`; // Default fallback
 
@@ -294,7 +295,7 @@ io.on("connection", async (socket) => {
           
           if (currentSessionId) {
             // Log system message for session start
-            await ChatLogger.logSystemMessage(currentSessionId, "Chat session started");
+            await ChatLogger.logSystemMessage(currentSessionId, "Hai, ada yang bisa saya bantu?");
             console.log(`📝 New chat session created: ${currentSessionId}`);
           }
         } else {

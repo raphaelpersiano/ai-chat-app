@@ -6,13 +6,11 @@ const http = require("http");
 const socketIo = require("socket.io");
 const path = require("path");
 const axios = require("axios");
-const { pool } = require("./config/database"); // Main database pool for user credit data
+const pool = require("./config/database"); // Import the PostgreSQL pool
 const sharedsession = require("express-socket.io-session"); // Import shared session
 const pdfParse = require("pdf-parse"); // Import pdf-parse
-const ChatLogger = require("./models/chatLogger"); // Import chat logger (uses Supabase)
 require("dotenv").config();
-
-const RESPONSE_DELAY_MS = 6000;
+const RESPONSE_DELAY_MS = 7000;
 
 // --- Knowledge Base Configuration ---
 // Use an array for multiple knowledge base URLs
@@ -121,10 +119,6 @@ app.get("/chat", isAuthenticated, (req, res) => {
   res.sendFile(path.join(__dirname, "../public/chat.html"));
 });
 
-app.get("/chat-history", isAuthenticated, (req, res) => {
-  res.sendFile(path.join(__dirname, "../public/chat-history.html"));
-});
-
 // Google OAuth routes
 app.get(
   "/auth/google",
@@ -138,7 +132,6 @@ app.get(
     if (req.user && req.user.id) {
       const { id, displayName, email } = req.user;
       try {
-        // Use main database pool for user credit data operations
         const result = await pool.query(
           "SELECT 1 FROM usercreditinsights WHERE user_id = $1",
           [id]
@@ -192,56 +185,10 @@ app.get("/api/user", isAuthenticated, (req, res) => {
   }
 });
 
-// New API routes for chat history and analytics (using Supabase)
-app.get("/api/chat/sessions", isAuthenticated, async (req, res) => {
-  try {
-    if (!ChatLogger.isEnabled()) {
-      return res.json([]);
-    }
-    
-    const userId = req.user.id;
-    const limit = parseInt(req.query.limit) || 10;
-    const sessions = await ChatLogger.getUserSessions(userId, limit);
-    res.json(sessions);
-  } catch (error) {
-    console.error("Error fetching user sessions:", error);
-    res.status(500).json({ error: "Failed to fetch chat sessions" });
-  }
-});
-
-app.get("/api/chat/sessions/:sessionId/messages", isAuthenticated, async (req, res) => {
-  try {
-    if (!ChatLogger.isEnabled()) {
-      return res.json([]);
-    }
-    
-    const { sessionId } = req.params;
-    const limit = parseInt(req.query.limit) || 100;
-    const messages = await ChatLogger.getSessionMessages(sessionId, limit);
-    res.json(messages);
-  } catch (error) {
-    console.error("Error fetching session messages:", error);
-    res.status(500).json({ error: "Failed to fetch session messages" });
-  }
-});
-
-app.get("/api/chat/stats", isAuthenticated, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const days = parseInt(req.query.days) || 7;
-    const stats = await ChatLogger.getUserChatStats(userId, days);
-    res.json(stats);
-  } catch (error) {
-    console.error("Error fetching chat stats:", error);
-    res.status(500).json({ error: "Failed to fetch chat statistics" });
-  }
-});
-
 // --- Helper function to get credit data (PostgreSQL version) ---
 async function getCreditDataForUser(userId) {
   const creditData = {};
   try {
-    // Use main database pool for user credit data
     const insightsRes = await pool.query("SELECT * FROM usercreditinsights WHERE user_id = $1", [userId]);
     if (insightsRes.rows.length === 0) {
       console.log(`No credit insights found for user ${userId}.`);
@@ -262,48 +209,14 @@ async function getCreditDataForUser(userId) {
 }
 // --- End Helper function ---
 
-// Helper function to get client IP address
-function getClientIP(socket) {
-  return socket.handshake.headers['x-forwarded-for'] || 
-         socket.handshake.headers['x-real-ip'] || 
-         socket.conn.remoteAddress || 
-         socket.handshake.address;
-}
-
-// Helper function to get user agent
-function getUserAgent(socket) {
-  return socket.handshake.headers['user-agent'] || 'Unknown';
-}
-
-io.on("connection", async (socket) => {
+io.on("connection", (socket) => {
   let currentUserId = null;
-  let currentSessionId = null;
   let pendingTimer = null;
 
   // Get current user ID from session
   if (socket.handshake.session && socket.handshake.session.passport && socket.handshake.session.passport.user) {
       currentUserId = socket.handshake.session.passport.user;
       console.log(`🔌 Client connected: ${socket.id}, User ID: ${currentUserId}`);
-      
-      // Create new chat session for this connection (using Supabase)
-      try {
-        if (ChatLogger.isEnabled()) {
-          const userAgent = getUserAgent(socket);
-          const ipAddress = getClientIP(socket);
-          currentSessionId = await ChatLogger.createSession(currentUserId, socket.id, userAgent, ipAddress);
-          
-          if (currentSessionId) {
-            // Log system message for session start
-            await ChatLogger.logSystemMessage(currentSessionId, "Chat session started");
-            console.log(`📝 New chat session created: ${currentSessionId}`);
-          }
-        } else {
-          console.log(`⚠️ Chat logging is disabled - session not created`);
-        }
-      } catch (error) {
-        console.error("❌ Error creating chat session:", error);
-        // Continue without logging if there's an error
-      }
   } else {
       console.log(`🔌 Client connected: ${socket.id}, but user is not authenticated via session.`);
   }
@@ -316,54 +229,28 @@ io.on("connection", async (socket) => {
 
   // Helper: actually call OpenRouter and emit AI response
   const generateAIResponse = async () => {
-    const startTime = Date.now();
-    
-    // clear timer so we don't accidentally re-fire
+    // clear timer so we don’t accidentally re-fire
     pendingTimer = null;
 
     // Build your LLM message array exactly as before
-    // (system prompt + user's credit data + all messages so far)
+    // (system prompt + user’s credit data + all messages so far)
     const openRouterApiKey = process.env.OPENROUTER_API_KEY;
     const openRouterUrl = process.env.OPENROUTER_URL || "https://openrouter.ai/api/v1/chat/completions";
 
     if (!process.env.DATABASE_URL) {
         console.error("DATABASE_URL not configured.");
-        const errorMsg = "Maaf, konfigurasi database belum selesai.";
-        socket.emit("receiveMessage", { sender: "Admin", text: errorMsg, timestamp: new Date() });
-        
-        // Log error message (to Supabase)
-        if (currentSessionId && ChatLogger.isEnabled()) {
-          try {
-            await ChatLogger.logErrorMessage(currentSessionId, errorMsg);
-          } catch (logError) {
-            console.error("Error logging error message:", logError);
-          }
-        }
-        
+        socket.emit("receiveMessage", { sender: "Admin", text: "Maaf, konfigurasi database belum selesai.", timestamp: new Date() });
         conversationHistory.pop();
         return;
     }
-    
     if (!openRouterApiKey || openRouterApiKey === "your_openrouter_api_key") {
       console.warn("OpenRouter API key not configured.");
-      const errorMsg = "Maaf, konfigurasi AI admin belum selesai.";
-      socket.emit("receiveMessage", { sender: "Admin", text: errorMsg, timestamp: new Date() });
-      
-      // Log error message (to Supabase)
-      if (currentSessionId && ChatLogger.isEnabled()) {
-        try {
-          await ChatLogger.logErrorMessage(currentSessionId, errorMsg);
-        } catch (logError) {
-          console.error("Error logging error message:", logError);
-        }
-      }
-      
+      socket.emit("receiveMessage", { sender: "Admin", text: "Maaf, konfigurasi AI admin belum selesai.", timestamp: new Date() });
       conversationHistory.pop();
       return;
     }
 
     try {
-      // Get user credit data from main database
       const userCreditData = await getCreditDataForUser(currentUserId);
       let creditDataContext = "No credit data available for this user.";
       if (userCreditData) {
@@ -394,9 +281,6 @@ io.on("connection", async (socket) => {
       const aiText = resp.data.choices?.[0]?.message?.content
         || "Maaf, saya tidak bisa merespons saat ini.";
 
-      const endTime = Date.now();
-      const responseTime = endTime - startTime;
-
       // Push into history and emit
       conversationHistory.push({ role: "assistant", content: aiText });
       socket.emit("receiveMessage", {
@@ -404,106 +288,38 @@ io.on("connection", async (socket) => {
         text: aiText,
         timestamp: new Date(),
       });
-
-      // Log AI response to Supabase database
-      if (currentSessionId && ChatLogger.isEnabled()) {
-        try {
-          await ChatLogger.logAIResponse(
-            currentSessionId, 
-            aiText, 
-            "google/gemini-2.0-flash-exp:free", 
-            responseTime,
-            resp.data.usage?.total_tokens || null
-          );
-        } catch (logError) {
-          console.error("Error logging AI response:", logError);
-        }
-      }
-
     } catch (err) {
       console.error("AI error:", err);
-      const errorMsg = "Maaf, terjadi kesalahan saat memproses permintaan Anda.";
       socket.emit("receiveMessage", {
         sender: "Admin",
-        text: errorMsg,
+        text: "Maaf, terjadi kesalahan saat memproses permintaan Anda.",
         timestamp: new Date(),
       });
-
-      // Log error message (to Supabase)
-      if (currentSessionId && ChatLogger.isEnabled()) {
-        try {
-          await ChatLogger.logErrorMessage(currentSessionId, `AI Error: ${err.message}`);
-        } catch (logError) {
-          console.error("Error logging error message:", logError);
-        }
-      }
     }
   };
 
-  socket.on("sendMessage", async (message) => {
-    // 1. Log user message to Supabase database first
-    if (currentSessionId && currentUserId && ChatLogger.isEnabled()) {
-      try {
-        await ChatLogger.logUserMessage(currentSessionId, currentUserId, message.text);
-      } catch (logError) {
-        console.error("Error logging user message:", logError);
-      }
-    }
-
-    // 2. Push user message to conversation history
+  socket.on("sendMessage", (message) => {
+    // 1. Push user message immediately
     conversationHistory.push({ role: "user", content: message.text });
 
-    // 3. Reset the 7-second "bomb"
+    // 2. Reset the 15-second “bomb”
     if (pendingTimer) clearTimeout(pendingTimer);
     pendingTimer = setTimeout(() => {
       generateAIResponse().catch(err => {
         console.error("AI error:", err);
-        const errorMsg = "Maaf, terjadi kesalahan saat memproses permintaan Anda.";
         socket.emit("receiveMessage", {
           sender: "Admin",
-          text: errorMsg,
+          text: "Maaf, terjadi kesalahan saat memproses permintaan Anda.",
           timestamp: new Date(),
         });
-
-        // Log error message (to Supabase)
-        if (currentSessionId && ChatLogger.isEnabled()) {
-          ChatLogger.logErrorMessage(currentSessionId, `AI Error: ${err.message}`)
-            .catch(logError => console.error("Error logging error message:", logError));
-        }
       });
-    }, RESPONSE_DELAY_MS); // 7-second delay
+    }, RESPONSE_DELAY_MS); // 15-second delay
   });
 
-  socket.on("disconnect", async () => {
-    console.log(`🔌 Client disconnected: ${socket.id}`);
-    
+  socket.on("disconnect", () => {
     if (pendingTimer) clearTimeout(pendingTimer);
-    
-    // End the chat session (in Supabase)
-    if (currentSessionId && ChatLogger.isEnabled()) {
-      try {
-        await ChatLogger.logSystemMessage(currentSessionId, "Chat session ended");
-        await ChatLogger.endSession(currentSessionId);
-        await ChatLogger.updateSessionAnalytics(currentSessionId);
-        console.log(`📝 Chat session ended: ${currentSessionId}`);
-      } catch (error) {
-        console.error("❌ Error ending chat session:", error);
-      }
-    }
   });
 });
-
-// Cleanup job for old sessions (run daily) - only if chat logging is enabled
-if (ChatLogger.isEnabled() && process.env.ENABLE_CLEANUP === 'true') {
-  setInterval(async () => {
-    try {
-      const cleanupDays = parseInt(process.env.CLEANUP_OLD_SESSIONS_DAYS) || 30;
-      await ChatLogger.cleanupOldSessions(cleanupDays);
-    } catch (error) {
-      console.error("Error in cleanup job:", error);
-    }
-  }, 24 * 60 * 60 * 1000); // Run every 24 hours
-}
 
 // Start server and fetch initial knowledge base
 const PORT = process.env.PORT || 3000;
@@ -511,21 +327,17 @@ const PORT = process.env.PORT || 3000;
   await updateKnowledgeBase(); // Fetch KB before starting server
   server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
-    
-    // Database status messages
     if (process.env.DATABASE_URL) {
-        console.log("✅ Main database (user credit data) connection configured");
+        console.log("Attempting to connect to PostgreSQL via DATABASE_URL");
     } else {
-        console.warn("⚠️ DATABASE_URL environment variable is not set. Main database operations will fail.");
-    }
-    
-    if (ChatLogger.isEnabled()) {
-        console.log("✅ Chat logging is enabled (Supabase)");
-    } else {
-        console.warn("⚠️ Chat logging is disabled (SUPABASE_DATABASE_URL not configured)");
+        console.warn("DATABASE_URL environment variable is not set. Database operations will fail.");
     }
   });
 })();
 
 module.exports = { app, server, io };
+
+
+
+
 

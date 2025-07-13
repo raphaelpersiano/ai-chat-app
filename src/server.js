@@ -10,15 +10,12 @@ const pool = require("./config/database"); // Import the PostgreSQL pool
 const sharedsession = require("express-socket.io-session"); // Import shared session
 const pdfParse = require("pdf-parse"); // Import pdf-parse
 require("dotenv").config();
+const RESPONSE_DELAY_MS = 7000;
 
 // --- Knowledge Base Configuration ---
 // Use an array for multiple knowledge base URLs
 const KNOWLEDGE_BASE_PDF_URLS = [
-  "https://storage.googleapis.com/campaign-skorlife/SkorBot%20Briefing%20v1.pdf",
-  "https://storage.googleapis.com/campaign-skorlife/SkorBot%20Briefing%20v1.pdf",
-  "https://storage.googleapis.com/campaign-skorlife/SkorBot%20Briefing%20v1.pdf",
-  "https://storage.googleapis.com/campaign-skorlife/SkorBot%20Briefing%20v1.pdf",
-  "https://storage.googleapis.com/campaign-skorlife/SkorBot%20Briefing%20v1.pdf"
+  "https://storage.googleapis.com/campaign-skorlife/Chatbot/SkorBot%20Briefing%20v1.pdf"
 ];
 let knowledgeBaseContent = `Anda adalah asisten AI dasar. Knowledge base belum dimuat atau gagal dimuat.`; // Default fallback
 
@@ -142,33 +139,17 @@ app.get(
         if (result.rows.length === 0) {
           console.log(`User ${id} tidak ada di usercreditinsights. Membuat dummy data.`);
            await pool.query(
-            `INSERT INTO usercreditinsights (
-              user_id, credit_score, KOL_score, outstanding_amount,
-              number_of_unsecured_loan, number_of_secured_loan, penalty_amount,
-              max_dpd, last_updated, number_of_cc, full_name, email
-            ) VALUES (
-              $1, 650, 1, 10000000, 2, 1, 0, 5, NOW(), 1, $2, $3
-            )`,
+            `INSERT INTO usercreditinsights (\n              user_id, credit_score, KOL_score, outstanding_amount,\n              number_of_unsecured_loan, number_of_secured_loan, penalty_amount,\n              max_dpd, last_updated, number_of_cc, full_name, email\n            ) VALUES (\n              $1, 650, 1, 10000000, 2, 1, 0, 5, NOW(), 1, $2, $3\n            )`,
             [id, displayName, email]
           );
           const tradelineRes = await pool.query(
-            `INSERT INTO usertradelinedata (
-              user_id, creditor, loan_type, credit_limit, outstanding,
-              monthly_payment, interest_rate, tenure, open_date, status
-            ) VALUES
-              ($1, 'Bank ABC', 'personal_loan', 5000000, 3000000, 500000, 12.5, 24, NOW(), 'active'),
-              ($1, 'Bank XYZ', 'credit_card', 10000000, 2000000, 300000, 18.0, 36, NOW(), 'active')
-            RETURNING tradeline_id`,
+            `INSERT INTO usertradelinedata (\n              user_id, creditor, loan_type, credit_limit, outstanding,\n              monthly_payment, interest_rate, tenure, open_date, status\n            ) VALUES\n              ($1, 'Bank ABC', 'personal_loan', 5000000, 3000000, 500000, 12.5, 24, NOW(), 'active'),\n              ($1, 'Bank XYZ', 'credit_card', 10000000, 2000000, 300000, 18.0, 36, NOW(), 'active')\n            RETURNING tradeline_id`,
             [id]
           );
           const tradelineIds = tradelineRes.rows.map(row => row.tradeline_id);
           for (const tid of tradelineIds) {
             await pool.query(
-              `INSERT INTO userpaymenthistory (
-                tradeline_id, payment_date, payment_amount, penalty_amount, dpd
-              ) VALUES
-                ($1, NOW() - INTERVAL '30 days', 500000, 0, 0),
-                ($1, NOW() - INTERVAL '60 days', 500000, 0, 0)`,
+              `INSERT INTO userpaymenthistory (\n                tradeline_id, payment_date, payment_amount, penalty_amount, dpd\n              ) VALUES\n                ($1, NOW() - INTERVAL '30 days', 500000, 0, 0),\n                ($1, NOW() - INTERVAL '60 days', 500000, 0, 0)`,
               [tid]
             );
           }
@@ -177,10 +158,7 @@ app.get(
           console.log(`User ${id} sudah ada di usercreditinsights.`);
         }
         await pool.query(
-          `INSERT INTO usercreditinsights (user_id, full_name, email, last_updated)
-           VALUES ($1, $2, $3, NOW())
-           ON CONFLICT (user_id)
-           DO UPDATE SET full_name = EXCLUDED.full_name, email = EXCLUDED.email, last_updated = NOW()`,
+          `INSERT INTO usercreditinsights (user_id, full_name, email, last_updated)\n           VALUES ($1, $2, $3, NOW())\n           ON CONFLICT (user_id)\n           DO UPDATE SET full_name = EXCLUDED.full_name, email = EXCLUDED.email, last_updated = NOW()`,
           [id, displayName, email]
         );
       } catch (err) {
@@ -233,29 +211,29 @@ async function getCreditDataForUser(userId) {
 
 io.on("connection", (socket) => {
   let currentUserId = null;
+  let pendingTimer = null;
+
+  // Get current user ID from session
   if (socket.handshake.session && socket.handshake.session.passport && socket.handshake.session.passport.user) {
       currentUserId = socket.handshake.session.passport.user;
-      console.log(`Client connected: ${socket.id}, User ID: ${currentUserId}`);
+      console.log(`🔌 Client connected: ${socket.id}, User ID: ${currentUserId}`);
   } else {
-      console.log(`Client connected: ${socket.id}, but user is not authenticated via session.`);
+      console.log(`🔌 Client connected: ${socket.id}, but user is not authenticated via session.`);
   }
 
-  // Initialize conversation history using the combined knowledge base
+  // Shared conversation history per socket
   const conversationHistory = [
-    { role: "system", content: knowledgeBaseContent }, // Use the combined dynamic content
+    { role: "system", content: knowledgeBaseContent },
     { role: "assistant", content: "Halo! Selamat datang. Saya adalah asisten kredit AI Anda. Tanyakan apa saja tentang data kredit simulasi Anda." }
   ];
 
-  socket.on("sendMessage", async (message) => {
-    if (!currentUserId) {
-        console.log(`Message received from unauthenticated socket ${socket.id}`);
-        socket.emit("receiveMessage", { sender: "Admin", text: "Sesi Anda tidak valid atau telah berakhir. Silakan login kembali.", timestamp: new Date() });
-        return;
-    }
+  // Helper: actually call OpenRouter and emit AI response
+  const generateAIResponse = async () => {
+    // clear timer so we don’t accidentally re-fire
+    pendingTimer = null;
 
-    console.log(`Message received from ${socket.id} (User: ${currentUserId}):`, message);
-    conversationHistory.push({ role: "user", content: message.text });
-
+    // Build your LLM message array exactly as before
+    // (system prompt + user’s credit data + all messages so far)
     const openRouterApiKey = process.env.OPENROUTER_API_KEY;
     const openRouterUrl = process.env.OPENROUTER_URL || "https://openrouter.ai/api/v1/chat/completions";
 
@@ -289,51 +267,57 @@ io.on("connection", (socket) => {
       // Prepare messages for LLM, including dynamic system prompt and user data context
       const messagesForLLM = [
           conversationHistory[0], // The dynamic system prompt (combined KB)
-          { role: "system", content: `Current User's Simulated Credit Data:\n${creditDataContext}` },
+          { role: "system", content: `Current User\\\"s Simulated Credit Data:\n${creditDataContext}` },
           ...conversationHistory.slice(1) // Assistant greeting + user messages
       ];
 
-      const response = await axios.post(
+      // Fire the request
+      const resp = await axios.post(
         openRouterUrl,
-        {
-          model: "google/gemini-2.0-flash-exp:free",
-          messages: messagesForLLM,
-        },
-        {
-          headers: {
-            "Authorization": `Bearer ${openRouterApiKey}`,
-            "Content-Type": "application/json",
-          },
-        }
+        { model: "google/gemini-2.0-flash-exp:free", messages: messagesForLLM },
+        { headers: { "Authorization": `Bearer ${openRouterApiKey}` } }
       );
 
-      let aiResponseText = "Maaf, saya tidak bisa merespons saat ini.";
-      if (response.data && response.data.choices && response.data.choices.length > 0) {
-        aiResponseText = response.data.choices[0].message.content;
-      }
+      const aiText = resp.data.choices?.[0]?.message?.content
+        || "Maaf, saya tidak bisa merespons saat ini.";
 
-      console.log(`AI Response for ${socket.id} (User: ${currentUserId}):`, aiResponseText);
-      conversationHistory.push({ role: "assistant", content: aiResponseText });
-
+      // Push into history and emit
+      conversationHistory.push({ role: "assistant", content: aiText });
       socket.emit("receiveMessage", {
         sender: "Admin",
-        text: aiResponseText,
+        text: aiText,
         timestamp: new Date(),
       });
-
-    } catch (error) {
-      console.error(`Error during AI processing or data fetching for user ${currentUserId}:`, error.response ? error.response.data : error.message);
-      conversationHistory.pop();
+    } catch (err) {
+      console.error("AI error:", err);
       socket.emit("receiveMessage", {
         sender: "Admin",
-        text: "Maaf, terjadi kesalahan saat memproses permintaan Anda atau mengambil data kredit.",
+        text: "Maaf, terjadi kesalahan saat memproses permintaan Anda.",
         timestamp: new Date(),
       });
     }
+  };
+
+  socket.on("sendMessage", (message) => {
+    // 1. Push user message immediately
+    conversationHistory.push({ role: "user", content: message.text });
+
+    // 2. Reset the 15-second “bomb”
+    if (pendingTimer) clearTimeout(pendingTimer);
+    pendingTimer = setTimeout(() => {
+      generateAIResponse().catch(err => {
+        console.error("AI error:", err);
+        socket.emit("receiveMessage", {
+          sender: "Admin",
+          text: "Maaf, terjadi kesalahan saat memproses permintaan Anda.",
+          timestamp: new Date(),
+        });
+      });
+    }, RESPONSE_DELAY_MS); // 15-second delay
   });
 
   socket.on("disconnect", () => {
-    console.log(`Client disconnected: ${socket.id} (User: ${currentUserId || 'N/A'})`);
+    if (pendingTimer) clearTimeout(pendingTimer);
   });
 });
 
@@ -352,4 +336,8 @@ const PORT = process.env.PORT || 3000;
 })();
 
 module.exports = { app, server, io };
+
+
+
+
 

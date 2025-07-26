@@ -23,7 +23,6 @@ const whatsappApiUrl = whatsappPhoneId
   : null;
 const waConversations = {};
 const waSessions = {};
-const WA_HISTORY_LIMIT = 10; // Limit stored conversation per user
 const WA_MESSAGE_WINDOW_MS = parseInt(
   process.env.WA_MESSAGE_WINDOW_MS || "6000",
   10
@@ -351,6 +350,18 @@ function queueWhatsAppMessage(from, text) {
   }
   const buf = waBuffers[from];
   buf.texts.push(text);
+  // Log each incoming WhatsApp message immediately
+  if (ChatLogger.isEnabled()) {
+    ensureWaSession(from)
+      .then((sessionId) => {
+        if (sessionId) {
+          ChatLogger.logUserMessage(sessionId, `wa_${from}`, text).catch((err) => {
+            console.error('Error logging WA user message:', err);
+          });
+        }
+      })
+      .catch((err) => console.error('Error ensuring WA session:', err));
+  }
   if (buf.timer) clearTimeout(buf.timer);
   buf.timer = setTimeout(() => {
     const combined = buf.texts.join('\n');
@@ -380,16 +391,6 @@ async function handleWhatsAppMessage(from, text) {
 
   const convo = waConversations[from];
   convo.push({ role: 'user', content: text });
-  if (sessionId && ChatLogger.isEnabled()) {
-    try {
-      await ChatLogger.logUserMessage(sessionId, `wa_${from}`, text);
-    } catch (err) {
-      console.error('Error logging WA user message:', err);
-    }
-  }
-  if (convo.length > WA_HISTORY_LIMIT) {
-    convo.splice(1, convo.length - WA_HISTORY_LIMIT); // keep system prompt
-  }
 
   try {
     const openRouterApiKey = process.env.OPENROUTER_API_KEY;
@@ -409,9 +410,6 @@ async function handleWhatsAppMessage(from, text) {
       } catch (err) {
         console.error('Error logging WA AI response:', err);
       }
-    }
-    if (convo.length > WA_HISTORY_LIMIT) {
-      convo.splice(1, convo.length - WA_HISTORY_LIMIT); // keep system prompt
     }
 
     await axios.post(

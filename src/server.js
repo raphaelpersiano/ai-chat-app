@@ -19,7 +19,7 @@ const whatsappToken = process.env.WHATSAPP_TOKEN;
 const whatsappPhoneId = process.env.WHATSAPP_PHONE_ID;
 const whatsappVerifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
 const whatsappApiUrl = whatsappPhoneId
-  ? `https://graph.facebook.com/v19.0/${whatsappPhoneId}/messages`
+  ? `https://graph.facebook.com/v23.0/${whatsappPhoneId}/messages`
   : null;
 const waConversations = {};
 const WA_HISTORY_LIMIT = 10; // Limit stored conversation per user

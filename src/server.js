@@ -44,6 +44,7 @@ async function ensureWaSession(from) {
       if (sessionId) {
         await ChatLogger.logSystemMessage(sessionId, 'Hai, ada yang bisa saya bantu?');
         waSessions[from] = sessionId;
+        console.log(`✅ WhatsApp session created for ${from}: ${sessionId}`);
         return sessionId;
       }
     } catch (err) {
@@ -187,17 +188,33 @@ app.get(
         if (result.rows.length === 0) {
           console.log(`User ${id} tidak ada di usercreditinsights. Membuat dummy data.`);
            await pool.query(
-            `INSERT INTO usercreditinsights (\n              user_id, credit_score, KOL_score, outstanding_amount,\n              number_of_unsecured_loan, number_of_secured_loan, penalty_amount,\n              max_dpd, last_updated, number_of_cc, full_name, email\n            ) VALUES (\n              $1, 650, 1, 10000000, 2, 1, 0, 5, NOW(), 1, $2, $3\n            )`,
+            `INSERT INTO usercreditinsights (
+              user_id, credit_score, KOL_score, outstanding_amount,
+              number_of_unsecured_loan, number_of_secured_loan, penalty_amount,
+              max_dpd, last_updated, number_of_cc, full_name, email
+            ) VALUES (
+              $1, 650, 1, 10000000, 2, 1, 0, 5, NOW(), 1, $2, $3
+            )`,
             [id, displayName, email]
           );
           const tradelineRes = await pool.query(
-            `INSERT INTO usertradelinedata (\n              user_id, creditor, loan_type, credit_limit, outstanding,\n              monthly_payment, interest_rate, tenure, open_date, status\n            ) VALUES\n              ($1, 'Bank ABC', 'personal_loan', 5000000, 3000000, 500000, 12.5, 24, NOW(), 'active'),\n              ($1, 'Bank XYZ', 'credit_card', 10000000, 2000000, 300000, 18.0, 36, NOW(), 'active')\n            RETURNING tradeline_id`,
+            `INSERT INTO usertradelinedata (
+              user_id, creditor, loan_type, credit_limit, outstanding,
+              monthly_payment, interest_rate, tenure, open_date, status
+            ) VALUES
+              ($1, 'Bank ABC', 'personal_loan', 5000000, 3000000, 500000, 12.5, 24, NOW(), 'active'),
+              ($1, 'Bank XYZ', 'credit_card', 10000000, 2000000, 300000, 18.0, 36, NOW(), 'active')
+            RETURNING tradeline_id`,
             [id]
           );
           const tradelineIds = tradelineRes.rows.map(row => row.tradeline_id);
           for (const tid of tradelineIds) {
             await pool.query(
-              `INSERT INTO userpaymenthistory (\n                tradeline_id, payment_date, payment_amount, penalty_amount, dpd\n              ) VALUES\n                ($1, NOW() - INTERVAL '30 days', 500000, 0, 0),\n                ($1, NOW() - INTERVAL '60 days', 500000, 0, 0)`,
+              `INSERT INTO userpaymenthistory (
+                tradeline_id, payment_date, payment_amount, penalty_amount, dpd
+              ) VALUES
+                ($1, NOW() - INTERVAL '30 days', 500000, 0, 0),
+                ($1, NOW() - INTERVAL '60 days', 500000, 0, 0)`,
               [tid]
             );
           }
@@ -206,7 +223,10 @@ app.get(
           console.log(`User ${id} sudah ada di usercreditinsights.`);
         }
         await pool.query(
-          `INSERT INTO usercreditinsights (user_id, full_name, email, last_updated)\n           VALUES ($1, $2, $3, NOW())\n           ON CONFLICT (user_id)\n           DO UPDATE SET full_name = EXCLUDED.full_name, email = EXCLUDED.email, last_updated = NOW()`,
+          `INSERT INTO usercreditinsights (user_id, full_name, email, last_updated)
+           VALUES ($1, $2, $3, NOW())
+           ON CONFLICT (user_id)
+           DO UPDATE SET full_name = EXCLUDED.full_name, email = EXCLUDED.email, last_updated = NOW()`,
           [id, displayName, email]
         );
       } catch (err) {
@@ -297,6 +317,7 @@ app.post('/whatsapp-webhook', (req, res) => {
   const msg = changes?.value?.messages?.[0];
 
   if (msg && msg.from && msg.text?.body) {
+    console.log(`📱 WhatsApp message received from ${msg.from}: ${msg.text.body}`);
     // Queue message so multiple texts in quick succession are combined
     queueWhatsAppMessage(msg.from, msg.text.body);
   }
@@ -350,18 +371,26 @@ function queueWhatsAppMessage(from, text) {
   }
   const buf = waBuffers[from];
   buf.texts.push(text);
-  // Log each incoming WhatsApp message immediately
+  
+  // PERBAIKAN: Log setiap pesan WhatsApp yang masuk secara langsung
+  console.log(`📝 Logging WhatsApp message from ${from}: ${text}`);
   if (ChatLogger.isEnabled()) {
     ensureWaSession(from)
       .then((sessionId) => {
         if (sessionId) {
-          ChatLogger.logUserMessage(sessionId, `wa_${from}`, text).catch((err) => {
-            console.error('Error logging WA user message:', err);
-          });
+          return ChatLogger.logUserMessage(sessionId, `wa_${from}`, text);
         }
       })
-      .catch((err) => console.error('Error ensuring WA session:', err));
+      .then((messageId) => {
+        if (messageId) {
+          console.log(`✅ WhatsApp user message logged: ${messageId}`);
+        }
+      })
+      .catch((err) => {
+        console.error('❌ Error logging WA user message:', err);
+      });
   }
+  
   if (buf.timer) clearTimeout(buf.timer);
   buf.timer = setTimeout(() => {
     const combined = buf.texts.join('\n');
@@ -380,6 +409,7 @@ async function handleWhatsAppMessage(from, text) {
     return;
   }
 
+  console.log(`🤖 Processing WhatsApp message from ${from}: ${text}`);
   const sessionId = await ensureWaSession(from);
 
   if (!waConversations[from]) {
@@ -396,22 +426,34 @@ async function handleWhatsAppMessage(from, text) {
     const openRouterApiKey = process.env.OPENROUTER_API_KEY;
     const openRouterUrl = process.env.OPENROUTER_URL || 'https://openrouter.ai/api/v1/chat/completions';
 
+    const startTime = Date.now();
     const resp = await axios.post(
       openRouterUrl,
       { model: 'google/gemini-2.0-flash-exp:free', messages: convo },
       { headers: { Authorization: `Bearer ${openRouterApiKey}` } }
     );
+    const responseTime = Date.now() - startTime;
 
     const aiText = resp.data.choices?.[0]?.message?.content || 'Maaf, saya tidak bisa merespons saat ini.';
     convo.push({ role: 'assistant', content: aiText });
+    
+    // PERBAIKAN: Log response AI ke Supabase dengan informasi tambahan
     if (sessionId && ChatLogger.isEnabled()) {
       try {
-        await ChatLogger.logAIResponse(sessionId, aiText, 'google/gemini-2.0-flash-exp:free');
+        const messageId = await ChatLogger.logAIResponse(
+          sessionId, 
+          aiText, 
+          'google/gemini-2.0-flash-exp:free',
+          responseTime,
+          resp.data.usage?.total_tokens || null
+        );
+        console.log(`✅ WhatsApp AI response logged: ${messageId}`);
       } catch (err) {
-        console.error('Error logging WA AI response:', err);
+        console.error('❌ Error logging WA AI response:', err);
       }
     }
 
+    // Send response via WhatsApp
     await axios.post(
       whatsappApiUrl,
       {
@@ -421,8 +463,19 @@ async function handleWhatsAppMessage(from, text) {
       },
       { headers: { Authorization: `Bearer ${whatsappToken}` } }
     );
+    
+    console.log(`✅ WhatsApp response sent to ${from}`);
   } catch (err) {
-    console.error('WhatsApp AI error:', err);
+    console.error('❌ WhatsApp AI error:', err);
+    
+    // Log error message
+    if (sessionId && ChatLogger.isEnabled()) {
+      try {
+        await ChatLogger.logErrorMessage(sessionId, `Error processing message: ${err.message}`);
+      } catch (logErr) {
+        console.error('❌ Error logging error message:', logErr);
+      }
+    }
   }
 }
 
@@ -449,240 +502,168 @@ io.on("connection", async (socket) => {
             console.log(`📝 New chat session created: ${currentSessionId}`);
           }
         } else {
-          console.log(`⚠️ Chat logging is disabled - session not created`);
+          console.log(`⚠️ Chat logging is disabled - session not created for user ${currentUserId}`);
         }
       } catch (error) {
-        console.error("❌ Error creating chat session:", error);
-        // Continue without logging if there's an error
+        console.error("Error creating chat session:", error);
       }
   } else {
-      console.log(`🔌 Client connected: ${socket.id}, but user is not authenticated via session.`);
+      console.log(`🔌 Client connected: ${socket.id}, User not authenticated`);
   }
 
-  // Shared conversation history per socket
-  const conversationHistory = [
-    { role: "system", content: knowledgeBaseContent },
-    { role: "assistant", content: "Halo! Selamat datang. Saya adalah asisten kredit AI Anda. Tanyakan apa saja tentang data kredit simulasi Anda." }
-  ];
-
-  // Helper: actually call OpenRouter and emit AI response
-  const generateAIResponse = async () => {
-    const startTime = Date.now();
-    
-    // clear timer so we don't accidentally re-fire
-    pendingTimer = null;
-
-    // Build your LLM message array exactly as before
-    // (system prompt + user's credit data + all messages so far)
-    const openRouterApiKey = process.env.OPENROUTER_API_KEY;
-    const openRouterUrl = process.env.OPENROUTER_URL || "https://openrouter.ai/api/v1/chat/completions";
-
-    if (!process.env.DATABASE_URL) {
-        console.error("DATABASE_URL not configured.");
-        const errorMsg = "Maaf, konfigurasi database belum selesai.";
-        socket.emit("receiveMessage", { sender: "Admin", text: errorMsg, timestamp: new Date() });
-        
-        // Log error message (to Supabase)
-        if (currentSessionId && ChatLogger.isEnabled()) {
-          try {
-            await ChatLogger.logErrorMessage(currentSessionId, errorMsg);
-          } catch (logError) {
-            console.error("Error logging error message:", logError);
-          }
-        }
-        
-        conversationHistory.pop();
-        return;
-    }
-    
-    if (!openRouterApiKey || openRouterApiKey === "your_openrouter_api_key") {
-      console.warn("OpenRouter API key not configured.");
-      const errorMsg = "Maaf, konfigurasi AI admin belum selesai.";
-      socket.emit("receiveMessage", { sender: "Admin", text: errorMsg, timestamp: new Date() });
-      
-      // Log error message (to Supabase)
-      if (currentSessionId && ChatLogger.isEnabled()) {
-        try {
-          await ChatLogger.logErrorMessage(currentSessionId, errorMsg);
-        } catch (logError) {
-          console.error("Error logging error message:", logError);
-        }
-      }
-      
-      conversationHistory.pop();
+  socket.on("message", async (data) => {
+    if (!currentUserId) {
+      socket.emit("response", { error: "User not authenticated" });
       return;
     }
 
-    try {
-      // Get user credit data from main database
-      const userCreditData = await getCreditDataForUser(currentUserId);
-      let creditDataContext = "No credit data available for this user.";
-      if (userCreditData) {
-          const insightsForLLM = { ...userCreditData.insights };
-          delete insightsForLLM.user_id;
-          delete insightsForLLM.email;
-          delete insightsForLLM.last_updated;
-          creditDataContext = `User Credit Data:\nInsights: ${JSON.stringify(insightsForLLM)}\nTradelines: ${JSON.stringify(userCreditData.tradelines)}`;
-      } else {
-          console.log(`No credit data found for user ${currentUserId} in DB.`);
-          creditDataContext = "No specific credit data found for your account in the simulation database.";
-      }
+    const userMessage = data.message;
+    console.log(`💬 Message from user ${currentUserId}: ${userMessage}`);
 
-      // Prepare messages for LLM, including dynamic system prompt and user data context
-      const messagesForLLM = [
-          conversationHistory[0], // The dynamic system prompt (combined KB)
-          { role: "system", content: `Current User\\\"s Simulated Credit Data:\n${creditDataContext}` },
-          ...conversationHistory.slice(1) // Assistant greeting + user messages
-      ];
-
-      // Fire the request
-      const resp = await axios.post(
-        openRouterUrl,
-        { model: "google/gemini-2.0-flash-exp:free", messages: messagesForLLM },
-        { headers: { "Authorization": `Bearer ${openRouterApiKey}` } }
-      );
-
-      const aiText = resp.data.choices?.[0]?.message?.content
-        || "Maaf, saya tidak bisa merespons saat ini.";
-
-      const endTime = Date.now();
-      const responseTime = endTime - startTime;
-
-      // Push into history and emit
-      conversationHistory.push({ role: "assistant", content: aiText });
-      socket.emit("receiveMessage", {
-        sender: "Admin",
-        text: aiText,
-        timestamp: new Date(),
-      });
-
-      // Log AI response to Supabase database
-      if (currentSessionId && ChatLogger.isEnabled()) {
-        try {
-          await ChatLogger.logAIResponse(
-            currentSessionId, 
-            aiText, 
-            "google/gemini-2.0-flash-exp:free", 
-            responseTime,
-            resp.data.usage?.total_tokens || null
-          );
-        } catch (logError) {
-          console.error("Error logging AI response:", logError);
-        }
-      }
-
-    } catch (err) {
-      console.error("AI error:", err);
-      const errorMsg = "Maaf, terjadi kesalahan saat memproses permintaan Anda.";
-      socket.emit("receiveMessage", {
-        sender: "Admin",
-        text: errorMsg,
-        timestamp: new Date(),
-      });
-
-      // Log error message (to Supabase)
-      if (currentSessionId && ChatLogger.isEnabled()) {
-        try {
-          await ChatLogger.logErrorMessage(currentSessionId, `AI Error: ${err.message}`);
-        } catch (logError) {
-          console.error("Error logging error message:", logError);
-        }
-      }
-    }
-  };
-
-  socket.on("sendMessage", async (message) => {
-    // 1. Log user message to Supabase database first
-    if (currentSessionId && currentUserId && ChatLogger.isEnabled()) {
+    // PERBAIKAN: Log user message ke Supabase segera setelah diterima
+    if (currentSessionId && ChatLogger.isEnabled()) {
       try {
-        await ChatLogger.logUserMessage(currentSessionId, currentUserId, message.text);
-      } catch (logError) {
-        console.error("Error logging user message:", logError);
+        const messageId = await ChatLogger.logUserMessage(currentSessionId, currentUserId, userMessage);
+        console.log(`✅ User message logged: ${messageId}`);
+      } catch (error) {
+        console.error("❌ Error logging user message:", error);
       }
     }
 
-    // 2. Push user message to conversation history
-    conversationHistory.push({ role: "user", content: message.text });
+    // Clear any existing timer
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      pendingTimer = null;
+    }
 
-    // 3. Reset the 7-second "bomb"
-    if (pendingTimer) clearTimeout(pendingTimer);
-    pendingTimer = setTimeout(() => {
-      generateAIResponse().catch(err => {
-        console.error("AI error:", err);
-        const errorMsg = "Maaf, terjadi kesalahan saat memproses permintaan Anda.";
-        socket.emit("receiveMessage", {
-          sender: "Admin",
-          text: errorMsg,
-          timestamp: new Date(),
-        });
-
-        // Log error message (to Supabase)
-        if (currentSessionId && ChatLogger.isEnabled()) {
-          ChatLogger.logErrorMessage(currentSessionId, `AI Error: ${err.message}`)
-            .catch(logError => console.error("Error logging error message:", logError));
+    // Set a new timer for response delay
+    pendingTimer = setTimeout(async () => {
+      try {
+        // Get user credit data
+        const creditData = await getCreditDataForUser(currentUserId);
+        
+        // Prepare context with credit data
+        let contextMessage = knowledgeBaseContent;
+        if (creditData) {
+          contextMessage += `\n\nData Kredit User:\n${JSON.stringify(creditData, null, 2)}`;
         }
-      });
-    }, RESPONSE_DELAY_MS); // 7-second delay
+
+        // Prepare conversation for AI
+        const conversation = [
+          { role: "system", content: contextMessage },
+          { role: "user", content: userMessage }
+        ];
+
+        // Call OpenRouter API
+        const openRouterApiKey = process.env.OPENROUTER_API_KEY;
+        const openRouterUrl = process.env.OPENROUTER_URL || 'https://openrouter.ai/api/v1/chat/completions';
+
+        const startTime = Date.now();
+        const response = await axios.post(
+          openRouterUrl,
+          {
+            model: "google/gemini-2.0-flash-exp:free",
+            messages: conversation,
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${openRouterApiKey}`,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+        const responseTime = Date.now() - startTime;
+
+        const aiResponse = response.data.choices[0].message.content;
+        
+        // PERBAIKAN: Log AI response ke Supabase dengan informasi tambahan
+        if (currentSessionId && ChatLogger.isEnabled()) {
+          try {
+            const messageId = await ChatLogger.logAIResponse(
+              currentSessionId, 
+              aiResponse, 
+              'google/gemini-2.0-flash-exp:free',
+              responseTime,
+              response.data.usage?.total_tokens || null
+            );
+            console.log(`✅ AI response logged: ${messageId}`);
+          } catch (error) {
+            console.error("❌ Error logging AI response:", error);
+          }
+        }
+
+        // Send response to client
+        socket.emit("response", { message: aiResponse });
+        console.log(`🤖 AI response sent to user ${currentUserId}`);
+
+      } catch (error) {
+        console.error("Error processing message:", error);
+        
+        // PERBAIKAN: Log error message ke Supabase
+        if (currentSessionId && ChatLogger.isEnabled()) {
+          try {
+            await ChatLogger.logErrorMessage(currentSessionId, `Error processing message: ${error.message}`);
+          } catch (logError) {
+            console.error("❌ Error logging error message:", logError);
+          }
+        }
+        
+        socket.emit("response", { 
+          error: "Maaf, terjadi kesalahan dalam memproses pesan Anda. Silakan coba lagi." 
+        });
+      }
+    }, RESPONSE_DELAY_MS);
   });
 
   socket.on("disconnect", async () => {
     console.log(`🔌 Client disconnected: ${socket.id}`);
     
-    if (pendingTimer) clearTimeout(pendingTimer);
+    // Clear any pending timer
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      pendingTimer = null;
+    }
     
-    // End the chat session (in Supabase)
+    // End chat session (using Supabase)
     if (currentSessionId && ChatLogger.isEnabled()) {
       try {
-        await ChatLogger.logSystemMessage(currentSessionId, "Chat session ended");
         await ChatLogger.endSession(currentSessionId);
-        await ChatLogger.updateSessionAnalytics(currentSessionId);
         console.log(`📝 Chat session ended: ${currentSessionId}`);
       } catch (error) {
-        console.error("❌ Error ending chat session:", error);
+        console.error("Error ending chat session:", error);
       }
     }
   });
 });
 
-// Cleanup job for old sessions (run daily) - only if chat logging is enabled
-if (ChatLogger.isEnabled() && process.env.ENABLE_CLEANUP === 'true') {
-  setInterval(async () => {
-    try {
-      const cleanupDays = parseInt(process.env.CLEANUP_OLD_SESSIONS_DAYS) || 30;
-      await ChatLogger.cleanupOldSessions(cleanupDays);
-    } catch (error) {
-      console.error("Error in cleanup job:", error);
+// Logout route
+app.post("/logout", (req, res) => {
+  req.logout((err) => {
+    if (err) {
+      return res.status(500).json({ error: "Logout failed" });
     }
-  }, 24 * 60 * 60 * 1000); // Run every 24 hours
-}
-
-// Start server and fetch initial knowledge base
-const PORT = process.env.PORT || 3000;
-(async () => {
-  await updateKnowledgeBase(); // Fetch KB before starting server
-  server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    
-    // Database status messages
-    if (process.env.DATABASE_URL) {
-        console.log("✅ Main database (user credit data) connection configured");
-    } else {
-        console.warn("⚠️ DATABASE_URL environment variable is not set. Main database operations will fail.");
-    }
-    
-    if (ChatLogger.isEnabled()) {
-        console.log("✅ Chat logging is enabled (Supabase)");
-    } else {
-        console.warn("⚠️ Chat logging is disabled (SUPABASE_DATABASE_URL not configured)");
-    }
-
-    if (whatsappApiUrl && whatsappToken) {
-        console.log("✅ WhatsApp Cloud API integration enabled");
-    } else {
-        console.warn("⚠️ WhatsApp Cloud API not fully configured");
-    }
+    res.json({ message: "Logged out successfully" });
   });
-})();
+});
 
-module.exports = { app, server, io };
+// Start server and initialize knowledge base
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, async () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  
+  // Initialize knowledge base
+  try {
+    await updateKnowledgeBase();
+    console.log("✅ Knowledge base initialized");
+  } catch (error) {
+    console.error("❌ Error initializing knowledge base:", error);
+  }
+  
+  // Log chat logging status
+  if (ChatLogger.isEnabled()) {
+    console.log("✅ Chat logging to Supabase is enabled");
+  } else {
+    console.log("⚠️ Chat logging is disabled");
+  }
+});
 

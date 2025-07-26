@@ -22,6 +22,7 @@ const whatsappApiUrl = whatsappPhoneId
   ? `https://graph.facebook.com/v19.0/${whatsappPhoneId}/messages`
   : null;
 const waConversations = {};
+const WA_HISTORY_LIMIT = 10; // Limit stored conversation per user
 
 // --- Knowledge Base Configuration ---
 // Use an array for multiple knowledge base URLs
@@ -327,6 +328,9 @@ async function handleWhatsAppMessage(from, text) {
 
   const convo = waConversations[from];
   convo.push({ role: 'user', content: text });
+  if (convo.length > WA_HISTORY_LIMIT) {
+    convo.splice(1, convo.length - WA_HISTORY_LIMIT); // keep system prompt
+  }
 
   try {
     const openRouterApiKey = process.env.OPENROUTER_API_KEY;
@@ -340,6 +344,9 @@ async function handleWhatsAppMessage(from, text) {
 
     const aiText = resp.data.choices?.[0]?.message?.content || 'Maaf, saya tidak bisa merespons saat ini.';
     convo.push({ role: 'assistant', content: aiText });
+    if (convo.length > WA_HISTORY_LIMIT) {
+      convo.splice(1, convo.length - WA_HISTORY_LIMIT); // keep system prompt
+    }
 
     await axios.post(
       whatsappApiUrl,
@@ -603,6 +610,12 @@ const PORT = process.env.PORT || 3000;
         console.log("✅ Chat logging is enabled (Supabase)");
     } else {
         console.warn("⚠️ Chat logging is disabled (SUPABASE_DATABASE_URL not configured)");
+    }
+
+    if (whatsappApiUrl && whatsappToken) {
+        console.log("✅ WhatsApp Cloud API integration enabled");
+    } else {
+        console.warn("⚠️ WhatsApp Cloud API not fully configured");
     }
   });
 })();

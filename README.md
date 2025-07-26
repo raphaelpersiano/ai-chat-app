@@ -136,6 +136,7 @@ chat-app/
 *   Endpoint webhook disediakan di `/whatsapp-webhook`.
 *   Gunakan nilai `WHATSAPP_VERIFY_TOKEN` yang sama saat mendaftar webhook di Facebook Developer Console.
 *   Setelah webhook menerima pesan teks, server akan meneruskan pesan ke OpenRouter dan membalas ke nomor WhatsApp pengirim secara otomatis.
+*   Riwayat percakapan WhatsApp disimpan sementara (maksimal 10 pesan terakhir per pengguna).
 
 ## Catatan Penting
 

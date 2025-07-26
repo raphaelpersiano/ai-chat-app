@@ -14,6 +14,16 @@ require("dotenv").config();
 
 const RESPONSE_DELAY_MS = 3500;
 
+// --- WhatsApp Cloud API Configuration ---
+const whatsappToken = process.env.WHATSAPP_TOKEN;
+const whatsappPhoneId = process.env.WHATSAPP_PHONE_ID;
+const whatsappVerifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
+const whatsappApiUrl = whatsappPhoneId
+  ? `https://graph.facebook.com/v19.0/${whatsappPhoneId}/messages`
+  : null;
+const waConversations = {};
+const WA_HISTORY_LIMIT = 10; // Limit stored conversation per user
+
 // --- Knowledge Base Configuration ---
 // Use an array for multiple knowledge base URLs
 const KNOWLEDGE_BASE_PDF_URLS = [
@@ -239,6 +249,31 @@ app.get("/api/chat/stats", isAuthenticated, async (req, res) => {
   }
 });
 
+// --- WhatsApp Cloud API webhook ---
+app.get('/whatsapp-webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  if (mode === 'subscribe' && token === whatsappVerifyToken) {
+    console.log('✅ WhatsApp webhook verified');
+    return res.status(200).send(challenge);
+  }
+  res.sendStatus(403);
+});
+
+app.post('/whatsapp-webhook', async (req, res) => {
+  const entry = req.body.entry?.[0];
+  const changes = entry?.changes?.[0];
+  const msg = changes?.value?.messages?.[0];
+
+  if (msg && msg.from && msg.text?.body) {
+    await handleWhatsAppMessage(msg.from, msg.text.body);
+  }
+
+  res.sendStatus(200);
+});
+
 // --- Helper function to get credit data (PostgreSQL version) ---
 async function getCreditDataForUser(userId) {
   const creditData = {};
@@ -275,6 +310,56 @@ function getClientIP(socket) {
 // Helper function to get user agent
 function getUserAgent(socket) {
   return socket.handshake.headers['user-agent'] || 'Unknown';
+}
+
+// --- Handle incoming WhatsApp messages ---
+async function handleWhatsAppMessage(from, text) {
+  if (!whatsappApiUrl || !whatsappToken) {
+    console.warn('WhatsApp API not configured.');
+    return;
+  }
+
+  if (!waConversations[from]) {
+    waConversations[from] = [
+      { role: 'system', content: knowledgeBaseContent },
+      { role: 'assistant', content: 'Halo! Selamat datang. Saya adalah asisten kredit AI Anda. Tanyakan apa saja tentang data kredit simulasi Anda.' }
+    ];
+  }
+
+  const convo = waConversations[from];
+  convo.push({ role: 'user', content: text });
+  if (convo.length > WA_HISTORY_LIMIT) {
+    convo.splice(1, convo.length - WA_HISTORY_LIMIT); // keep system prompt
+  }
+
+  try {
+    const openRouterApiKey = process.env.OPENROUTER_API_KEY;
+    const openRouterUrl = process.env.OPENROUTER_URL || 'https://openrouter.ai/api/v1/chat/completions';
+
+    const resp = await axios.post(
+      openRouterUrl,
+      { model: 'google/gemini-2.0-flash-exp:free', messages: convo },
+      { headers: { Authorization: `Bearer ${openRouterApiKey}` } }
+    );
+
+    const aiText = resp.data.choices?.[0]?.message?.content || 'Maaf, saya tidak bisa merespons saat ini.';
+    convo.push({ role: 'assistant', content: aiText });
+    if (convo.length > WA_HISTORY_LIMIT) {
+      convo.splice(1, convo.length - WA_HISTORY_LIMIT); // keep system prompt
+    }
+
+    await axios.post(
+      whatsappApiUrl,
+      {
+        messaging_product: 'whatsapp',
+        to: from,
+        text: { body: aiText }
+      },
+      { headers: { Authorization: `Bearer ${whatsappToken}` } }
+    );
+  } catch (err) {
+    console.error('WhatsApp AI error:', err);
+  }
 }
 
 io.on("connection", async (socket) => {
@@ -525,6 +610,12 @@ const PORT = process.env.PORT || 3000;
         console.log("✅ Chat logging is enabled (Supabase)");
     } else {
         console.warn("⚠️ Chat logging is disabled (SUPABASE_DATABASE_URL not configured)");
+    }
+
+    if (whatsappApiUrl && whatsappToken) {
+        console.log("✅ WhatsApp Cloud API integration enabled");
+    } else {
+        console.warn("⚠️ WhatsApp Cloud API not fully configured");
     }
   });
 })();

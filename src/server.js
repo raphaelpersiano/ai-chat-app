@@ -14,6 +14,45 @@ require("dotenv").config();
 
 const RESPONSE_DELAY_MS = 3500;
 
+// --- WhatsApp Cloud API Configuration ---
+const whatsappToken = process.env.WHATSAPP_TOKEN;
+const whatsappPhoneId = process.env.WHATSAPP_PHONE_ID;
+const whatsappVerifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
+const whatsappApiUrl = whatsappPhoneId
+  ? `https://graph.facebook.com/v23.0/${whatsappPhoneId}/messages`
+  : null;
+const waConversations = {};
+const waSessions = {};
+const WA_MESSAGE_WINDOW_MS = parseInt(
+  process.env.WA_MESSAGE_WINDOW_MS || "6000",
+  10
+); // Wait this long after the last message before responding
+const waBuffers = {};
+
+// Ensure a chat logging session exists for a WhatsApp user
+async function ensureWaSession(from) {
+  if (waSessions[from]) {
+    return waSessions[from];
+  }
+  if (ChatLogger.isEnabled()) {
+    try {
+      const sessionId = await ChatLogger.createSession(
+        `wa_${from}`,
+        `whatsapp-${from}`,
+        'WhatsApp Cloud API'
+      );
+      if (sessionId) {
+        await ChatLogger.logSystemMessage(sessionId, 'Hai, ada yang bisa saya bantu?');
+        waSessions[from] = sessionId;
+        return sessionId;
+      }
+    } catch (err) {
+      console.error('Error creating WhatsApp session:', err);
+    }
+  }
+  return null;
+}
+
 // --- Knowledge Base Configuration ---
 // Use an array for multiple knowledge base URLs
 const KNOWLEDGE_BASE_PDF_URLS = [
@@ -239,6 +278,33 @@ app.get("/api/chat/stats", isAuthenticated, async (req, res) => {
   }
 });
 
+// --- WhatsApp Cloud API webhook ---
+app.get('/whatsapp-webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  if (mode === 'subscribe' && token === whatsappVerifyToken) {
+    console.log('✅ WhatsApp webhook verified');
+    return res.status(200).send(challenge);
+  }
+  res.sendStatus(403);
+});
+
+app.post('/whatsapp-webhook', (req, res) => {
+  const entry = req.body.entry?.[0];
+  const changes = entry?.changes?.[0];
+  const msg = changes?.value?.messages?.[0];
+
+  if (msg && msg.from && msg.text?.body) {
+    // Queue message so multiple texts in quick succession are combined
+    queueWhatsAppMessage(msg.from, msg.text.body);
+  }
+
+  // Respond immediately to comply with WhatsApp's 10s webhook timeout
+  res.sendStatus(200);
+});
+
 // --- Helper function to get credit data (PostgreSQL version) ---
 async function getCreditDataForUser(userId) {
   const creditData = {};
@@ -275,6 +341,89 @@ function getClientIP(socket) {
 // Helper function to get user agent
 function getUserAgent(socket) {
   return socket.handshake.headers['user-agent'] || 'Unknown';
+}
+
+// --- Queue WhatsApp messages so multiple texts within a short window are combined ---
+function queueWhatsAppMessage(from, text) {
+  if (!waBuffers[from]) {
+    waBuffers[from] = { texts: [], timer: null };
+  }
+  const buf = waBuffers[from];
+  buf.texts.push(text);
+  // Log each incoming WhatsApp message immediately
+  if (ChatLogger.isEnabled()) {
+    ensureWaSession(from)
+      .then((sessionId) => {
+        if (sessionId) {
+          ChatLogger.logUserMessage(sessionId, `wa_${from}`, text).catch((err) => {
+            console.error('Error logging WA user message:', err);
+          });
+        }
+      })
+      .catch((err) => console.error('Error ensuring WA session:', err));
+  }
+  if (buf.timer) clearTimeout(buf.timer);
+  buf.timer = setTimeout(() => {
+    const combined = buf.texts.join('\n');
+    buf.texts = [];
+    buf.timer = null;
+    handleWhatsAppMessage(from, combined).catch((err) => {
+      console.error('handleWhatsAppMessage error:', err);
+    });
+  }, WA_MESSAGE_WINDOW_MS);
+}
+
+// --- Handle combined WhatsApp message ---
+async function handleWhatsAppMessage(from, text) {
+  if (!whatsappApiUrl || !whatsappToken) {
+    console.warn('WhatsApp API not configured.');
+    return;
+  }
+
+  const sessionId = await ensureWaSession(from);
+
+  if (!waConversations[from]) {
+    waConversations[from] = [
+      { role: 'system', content: knowledgeBaseContent },
+      { role: 'assistant', content: 'Halo! Selamat datang. Saya adalah asisten kredit AI Anda. Tanyakan apa saja tentang data kredit simulasi Anda.' }
+    ];
+  }
+
+  const convo = waConversations[from];
+  convo.push({ role: 'user', content: text });
+
+  try {
+    const openRouterApiKey = process.env.OPENROUTER_API_KEY;
+    const openRouterUrl = process.env.OPENROUTER_URL || 'https://openrouter.ai/api/v1/chat/completions';
+
+    const resp = await axios.post(
+      openRouterUrl,
+      { model: 'google/gemini-2.0-flash-exp:free', messages: convo },
+      { headers: { Authorization: `Bearer ${openRouterApiKey}` } }
+    );
+
+    const aiText = resp.data.choices?.[0]?.message?.content || 'Maaf, saya tidak bisa merespons saat ini.';
+    convo.push({ role: 'assistant', content: aiText });
+    if (sessionId && ChatLogger.isEnabled()) {
+      try {
+        await ChatLogger.logAIResponse(sessionId, aiText, 'google/gemini-2.0-flash-exp:free');
+      } catch (err) {
+        console.error('Error logging WA AI response:', err);
+      }
+    }
+
+    await axios.post(
+      whatsappApiUrl,
+      {
+        messaging_product: 'whatsapp',
+        to: from,
+        text: { body: aiText }
+      },
+      { headers: { Authorization: `Bearer ${whatsappToken}` } }
+    );
+  } catch (err) {
+    console.error('WhatsApp AI error:', err);
+  }
 }
 
 io.on("connection", async (socket) => {
@@ -525,6 +674,12 @@ const PORT = process.env.PORT || 3000;
         console.log("✅ Chat logging is enabled (Supabase)");
     } else {
         console.warn("⚠️ Chat logging is disabled (SUPABASE_DATABASE_URL not configured)");
+    }
+
+    if (whatsappApiUrl && whatsappToken) {
+        console.log("✅ WhatsApp Cloud API integration enabled");
+    } else {
+        console.warn("⚠️ WhatsApp Cloud API not fully configured");
     }
   });
 })();

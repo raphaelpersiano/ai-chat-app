@@ -139,6 +139,7 @@ chat-app/
 *   Gunakan nilai `WHATSAPP_VERIFY_TOKEN` yang sama saat mendaftar webhook di Facebook Developer Console.
 *   Setelah webhook menerima pesan teks, server akan meneruskan pesan ke OpenRouter dan membalas ke nomor WhatsApp pengirim secara otomatis.
 *   Riwayat percakapan WhatsApp disimpan sementara (maksimal 10 pesan terakhir per pengguna) dan akan dicatat ke Supabase jika `SUPABASE_DATABASE_URL` dikonfigurasi.
+*   Riwayat percakapan WhatsApp disimpan sementara (maksimal 10 pesan terakhir per pengguna).
 *   Pesan yang dikirim pengguna berturut-turut akan digabung jika masih dalam rentang waktu `WA_MESSAGE_WINDOW_MS` (default 6000 ms) sehingga balasan hanya satu.
 
 ## Catatan Penting

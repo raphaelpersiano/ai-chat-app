@@ -51,6 +51,7 @@ Ini adalah aplikasi web sederhana yang memungkinkan pengguna login menggunakan a
         *   `WHATSAPP_TOKEN`: Token akses WhatsApp Cloud API Anda.
         *   `WHATSAPP_PHONE_ID`: ID nomor telepon yang terhubung ke WhatsApp Cloud API.
         *   `WHATSAPP_VERIFY_TOKEN`: Token verifikasi webhook untuk konfigurasi WhatsApp.
+        *   `WA_MESSAGE_WINDOW_MS`: Waktu tunggu sebelum pesan WhatsApp dikirim ke AI (default: 6000).
 
 4.  **Instal Dependensi:**
     *   Buka terminal atau command prompt.
@@ -137,6 +138,7 @@ chat-app/
 *   Gunakan nilai `WHATSAPP_VERIFY_TOKEN` yang sama saat mendaftar webhook di Facebook Developer Console.
 *   Setelah webhook menerima pesan teks, server akan meneruskan pesan ke OpenRouter dan membalas ke nomor WhatsApp pengirim secara otomatis.
 *   Riwayat percakapan WhatsApp disimpan sementara (maksimal 10 pesan terakhir per pengguna).
+*   Pesan yang dikirim pengguna berturut-turut akan digabung jika masih dalam rentang waktu `WA_MESSAGE_WINDOW_MS` (default 6000 ms) sehingga balasan hanya satu.
 
 ## Catatan Penting
 

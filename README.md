@@ -48,6 +48,7 @@ Ini adalah aplikasi web sederhana yang memungkinkan pengguna login menggunakan a
         *   `OPENROUTER_API_KEY`: **Wajib.** API Key Anda dari OpenRouter (atau penyedia LLM lain).
         *   `PORT`: Port server (default: 3000).
         *   `OPENROUTER_URL`: URL endpoint API OpenRouter (default: `https://openrouter.ai/api/v1/chat/completions`).
+        *   `SUPABASE_DATABASE_URL`: Connection string Supabase untuk menyimpan log chat.
         *   `WHATSAPP_TOKEN`: Token akses WhatsApp Cloud API Anda.
         *   `WHATSAPP_PHONE_ID`: ID nomor telepon yang terhubung ke WhatsApp Cloud API.
         *   `WHATSAPP_VERIFY_TOKEN`: Token verifikasi webhook untuk konfigurasi WhatsApp.
@@ -137,6 +138,7 @@ chat-app/
 *   Endpoint webhook disediakan di `/whatsapp-webhook`.
 *   Gunakan nilai `WHATSAPP_VERIFY_TOKEN` yang sama saat mendaftar webhook di Facebook Developer Console.
 *   Setelah webhook menerima pesan teks, server akan meneruskan pesan ke OpenRouter dan membalas ke nomor WhatsApp pengirim secara otomatis.
+*   Riwayat percakapan WhatsApp disimpan sementara (maksimal 10 pesan terakhir per pengguna) dan akan dicatat ke Supabase jika `SUPABASE_DATABASE_URL` dikonfigurasi.
 *   Riwayat percakapan WhatsApp disimpan sementara (maksimal 10 pesan terakhir per pengguna).
 *   Pesan yang dikirim pengguna berturut-turut akan digabung jika masih dalam rentang waktu `WA_MESSAGE_WINDOW_MS` (default 6000 ms) sehingga balasan hanya satu.
 

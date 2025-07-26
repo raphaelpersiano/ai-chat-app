@@ -22,12 +22,37 @@ const whatsappApiUrl = whatsappPhoneId
   ? `https://graph.facebook.com/v23.0/${whatsappPhoneId}/messages`
   : null;
 const waConversations = {};
+const waSessions = {};
 const WA_HISTORY_LIMIT = 10; // Limit stored conversation per user
 const WA_MESSAGE_WINDOW_MS = parseInt(
   process.env.WA_MESSAGE_WINDOW_MS || "6000",
   10
 ); // Wait this long after the last message before responding
 const waBuffers = {};
+
+// Ensure a chat logging session exists for a WhatsApp user
+async function ensureWaSession(from) {
+  if (waSessions[from]) {
+    return waSessions[from];
+  }
+  if (ChatLogger.isEnabled()) {
+    try {
+      const sessionId = await ChatLogger.createSession(
+        `wa_${from}`,
+        `whatsapp-${from}`,
+        'WhatsApp Cloud API'
+      );
+      if (sessionId) {
+        await ChatLogger.logSystemMessage(sessionId, 'Hai, ada yang bisa saya bantu?');
+        waSessions[from] = sessionId;
+        return sessionId;
+      }
+    } catch (err) {
+      console.error('Error creating WhatsApp session:', err);
+    }
+  }
+  return null;
+}
 
 // --- Knowledge Base Configuration ---
 // Use an array for multiple knowledge base URLs
@@ -163,33 +188,17 @@ app.get(
         if (result.rows.length === 0) {
           console.log(`User ${id} tidak ada di usercreditinsights. Membuat dummy data.`);
            await pool.query(
-            `INSERT INTO usercreditinsights (
-              user_id, credit_score, KOL_score, outstanding_amount,
-              number_of_unsecured_loan, number_of_secured_loan, penalty_amount,
-              max_dpd, last_updated, number_of_cc, full_name, email
-            ) VALUES (
-              $1, 650, 1, 10000000, 2, 1, 0, 5, NOW(), 1, $2, $3
-            )`,
+            `INSERT INTO usercreditinsights (\n              user_id, credit_score, KOL_score, outstanding_amount,\n              number_of_unsecured_loan, number_of_secured_loan, penalty_amount,\n              max_dpd, last_updated, number_of_cc, full_name, email\n            ) VALUES (\n              $1, 650, 1, 10000000, 2, 1, 0, 5, NOW(), 1, $2, $3\n            )`,
             [id, displayName, email]
           );
           const tradelineRes = await pool.query(
-            `INSERT INTO usertradelinedata (
-              user_id, creditor, loan_type, credit_limit, outstanding,
-              monthly_payment, interest_rate, tenure, open_date, status
-            ) VALUES
-              ($1, 'Bank ABC', 'personal_loan', 5000000, 3000000, 500000, 12.5, 24, NOW(), 'active'),
-          ($1, 'Bank XYZ', 'credit_card', 10000000, 2000000, 300000, 18.0, 36, NOW(), 'active')
-            RETURNING tradeline_id`,
+            `INSERT INTO usertradelinedata (\n              user_id, creditor, loan_type, credit_limit, outstanding,\n              monthly_payment, interest_rate, tenure, open_date, status\n            ) VALUES\n              ($1, 'Bank ABC', 'personal_loan', 5000000, 3000000, 500000, 12.5, 24, NOW(), 'active'),\n              ($1, 'Bank XYZ', 'credit_card', 10000000, 2000000, 300000, 18.0, 36, NOW(), 'active')\n            RETURNING tradeline_id`,
             [id]
           );
           const tradelineIds = tradelineRes.rows.map(row => row.tradeline_id);
           for (const tid of tradelineIds) {
             await pool.query(
-              `INSERT INTO userpaymenthistory (
-                tradeline_id, payment_date, payment_amount, penalty_amount, dpd
-              ) VALUES
-          ($1, NOW() - INTERVAL '30 days', 500000, 0, 0),
-                ($1, NOW() - INTERVAL '60 days', 500000, 0, 0)`,
+              `INSERT INTO userpaymenthistory (\n                tradeline_id, payment_date, payment_amount, penalty_amount, dpd\n              ) VALUES\n                ($1, NOW() - INTERVAL '30 days', 500000, 0, 0),\n                ($1, NOW() - INTERVAL '60 days', 500000, 0, 0)`,
               [tid]
             );
           }
@@ -198,10 +207,7 @@ app.get(
           console.log(`User ${id} sudah ada di usercreditinsights.`);
         }
         await pool.query(
-          `INSERT INTO usercreditinsights (user_id, full_name, email, last_updated)
-           VALUES ($1, $2, $3, NOW())
-           ON CONFLICT (user_id)
-         DO UPDATE SET full_name = EXCLUDED.full_name, email = EXCLUDED.email, last_updated = NOW()`,
+          `INSERT INTO usercreditinsights (user_id, full_name, email, last_updated)\n           VALUES ($1, $2, $3, NOW())\n           ON CONFLICT (user_id)\n           DO UPDATE SET full_name = EXCLUDED.full_name, email = EXCLUDED.email, last_updated = NOW()`,
           [id, displayName, email]
         );
       } catch (err) {
@@ -234,7 +240,7 @@ app.get("/api/chat/sessions", isAuthenticated, async (req, res) => {
     if (!ChatLogger.isEnabled()) {
       return res.json([]);
     }
-
+    
     const userId = req.user.id;
     const limit = parseInt(req.query.limit) || 10;
     const sessions = await ChatLogger.getUserSessions(userId, limit);
@@ -250,7 +256,7 @@ app.get("/api/chat/sessions/:sessionId/messages", isAuthenticated, async (req, r
     if (!ChatLogger.isEnabled()) {
       return res.json([]);
     }
-
+    
     const { sessionId } = req.params;
     const limit = parseInt(req.query.limit) || 100;
     const messages = await ChatLogger.getSessionMessages(sessionId, limit);
@@ -327,9 +333,9 @@ async function getCreditDataForUser(userId) {
 
 // Helper function to get client IP address
 function getClientIP(socket) {
-  return socket.handshake.headers['x-forwarded-for'] ||
-         socket.handshake.headers['x-real-ip'] ||
-         socket.conn.remoteAddress ||
+  return socket.handshake.headers['x-forwarded-for'] || 
+         socket.handshake.headers['x-real-ip'] || 
+         socket.conn.remoteAddress || 
          socket.handshake.address;
 }
 
@@ -363,6 +369,8 @@ async function handleWhatsAppMessage(from, text) {
     return;
   }
 
+  const sessionId = await ensureWaSession(from);
+
   if (!waConversations[from]) {
     waConversations[from] = [
       { role: 'system', content: knowledgeBaseContent },
@@ -372,6 +380,13 @@ async function handleWhatsAppMessage(from, text) {
 
   const convo = waConversations[from];
   convo.push({ role: 'user', content: text });
+  if (sessionId && ChatLogger.isEnabled()) {
+    try {
+      await ChatLogger.logUserMessage(sessionId, `wa_${from}`, text);
+    } catch (err) {
+      console.error('Error logging WA user message:', err);
+    }
+  }
   if (convo.length > WA_HISTORY_LIMIT) {
     convo.splice(1, convo.length - WA_HISTORY_LIMIT); // keep system prompt
   }
@@ -388,6 +403,13 @@ async function handleWhatsAppMessage(from, text) {
 
     const aiText = resp.data.choices?.[0]?.message?.content || 'Maaf, saya tidak bisa merespons saat ini.';
     convo.push({ role: 'assistant', content: aiText });
+    if (sessionId && ChatLogger.isEnabled()) {
+      try {
+        await ChatLogger.logAIResponse(sessionId, aiText, 'google/gemini-2.0-flash-exp:free');
+      } catch (err) {
+        console.error('Error logging WA AI response:', err);
+      }
+    }
     if (convo.length > WA_HISTORY_LIMIT) {
       convo.splice(1, convo.length - WA_HISTORY_LIMIT); // keep system prompt
     }
@@ -415,14 +437,14 @@ io.on("connection", async (socket) => {
   if (socket.handshake.session && socket.handshake.session.passport && socket.handshake.session.passport.user) {
       currentUserId = socket.handshake.session.passport.user;
       console.log(`🔌 Client connected: ${socket.id}, User ID: ${currentUserId}`);
-
+      
       // Create new chat session for this connection (using Supabase)
       try {
         if (ChatLogger.isEnabled()) {
           const userAgent = getUserAgent(socket);
           const ipAddress = getClientIP(socket);
           currentSessionId = await ChatLogger.createSession(currentUserId, socket.id, userAgent, ipAddress);
-
+          
           if (currentSessionId) {
             // Log system message for session start
             await ChatLogger.logSystemMessage(currentSessionId, "Hai, ada yang bisa saya bantu?");
@@ -448,7 +470,7 @@ io.on("connection", async (socket) => {
   // Helper: actually call OpenRouter and emit AI response
   const generateAIResponse = async () => {
     const startTime = Date.now();
-
+    
     // clear timer so we don't accidentally re-fire
     pendingTimer = null;
 
@@ -461,7 +483,7 @@ io.on("connection", async (socket) => {
         console.error("DATABASE_URL not configured.");
         const errorMsg = "Maaf, konfigurasi database belum selesai.";
         socket.emit("receiveMessage", { sender: "Admin", text: errorMsg, timestamp: new Date() });
-
+        
         // Log error message (to Supabase)
         if (currentSessionId && ChatLogger.isEnabled()) {
           try {
@@ -470,16 +492,16 @@ io.on("connection", async (socket) => {
             console.error("Error logging error message:", logError);
           }
         }
-
+        
         conversationHistory.pop();
         return;
     }
-
+    
     if (!openRouterApiKey || openRouterApiKey === "your_openrouter_api_key") {
       console.warn("OpenRouter API key not configured.");
       const errorMsg = "Maaf, konfigurasi AI admin belum selesai.";
       socket.emit("receiveMessage", { sender: "Admin", text: errorMsg, timestamp: new Date() });
-
+      
       // Log error message (to Supabase)
       if (currentSessionId && ChatLogger.isEnabled()) {
         try {
@@ -488,7 +510,7 @@ io.on("connection", async (socket) => {
           console.error("Error logging error message:", logError);
         }
       }
-
+      
       conversationHistory.pop();
       return;
     }
@@ -540,9 +562,9 @@ io.on("connection", async (socket) => {
       if (currentSessionId && ChatLogger.isEnabled()) {
         try {
           await ChatLogger.logAIResponse(
-            currentSessionId,
-            aiText,
-            "google/gemini-2.0-flash-exp:free",
+            currentSessionId, 
+            aiText, 
+            "google/gemini-2.0-flash-exp:free", 
             responseTime,
             resp.data.usage?.total_tokens || null
           );
@@ -607,9 +629,9 @@ io.on("connection", async (socket) => {
 
   socket.on("disconnect", async () => {
     console.log(`🔌 Client disconnected: ${socket.id}`);
-
+    
     if (pendingTimer) clearTimeout(pendingTimer);
-
+    
     // End the chat session (in Supabase)
     if (currentSessionId && ChatLogger.isEnabled()) {
       try {
@@ -642,14 +664,14 @@ const PORT = process.env.PORT || 3000;
   await updateKnowledgeBase(); // Fetch KB before starting server
   server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
-
+    
     // Database status messages
     if (process.env.DATABASE_URL) {
         console.log("✅ Main database (user credit data) connection configured");
     } else {
         console.warn("⚠️ DATABASE_URL environment variable is not set. Main database operations will fail.");
     }
-
+    
     if (ChatLogger.isEnabled()) {
         console.log("✅ Chat logging is enabled (Supabase)");
     } else {
@@ -665,3 +687,4 @@ const PORT = process.env.PORT || 3000;
 })();
 
 module.exports = { app, server, io };
+

@@ -13,7 +13,7 @@ class WhatsAppWebhook {
         this.phoneNumberId = process.env.META_PHONE_NUMBER_ID;
         this.verifyToken = process.env.META_WEBHOOK_VERIFY_TOKEN;
         this.appSecret = process.env.META_APP_SECRET;
-        this.whatsappApiUrl = `https://graph.facebook.com/v18.0/${this.phoneNumberId}/messages`;
+        this.whatsappApiUrl = `https://graph.facebook.com/v23.0/${this.phoneNumberId}/messages`;
         
         // Store for message buffering (phone_number -> {messages: [], timer: timeout})
         this.messageBuffers = new Map();

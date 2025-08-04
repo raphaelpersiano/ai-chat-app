@@ -120,13 +120,13 @@ app.get("/webhook/whatsapp", (req, res) => {
 });
 
 // WhatsApp webhook message handler (POST)
-app.post("/webhook/whatsapp", async (req, res) => {
+app.post("/webhook/whatsapp", express.raw({ type: "application/json" }), async (req, res) => {
   try {
     console.log("📞 WhatsApp webhook message received");
     
     // Verify webhook signature
     const signature = req.headers['x-hub-signature-256'];
-    const rawBody = req.body;
+    const rawBody = req.body.toString();
     
     if (!whatsappWebhook.verifySignature(rawBody, signature)) {
       console.error("❌ Invalid webhook signature");

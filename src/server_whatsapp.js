@@ -126,7 +126,7 @@ app.post("/webhook/whatsapp", express.raw({ type: "application/json" }), async (
     
     // Verify webhook signature
     const signature = req.headers['x-hub-signature-256'];
-    const rawBody = req.body.toString();
+    const rawBody = req.body;
     
     if (!whatsappWebhook.verifySignature(rawBody, signature)) {
       console.error("❌ Invalid webhook signature");
